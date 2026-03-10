@@ -2,6 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 import { getDb } from "../db.js";
 import { resolveBundledWorkflowsDir } from "../installer/paths.js";
 import YAML from "yaml";
@@ -61,6 +62,33 @@ function json(res: http.ServerResponse, data: unknown, status = 200) {
   res.end(JSON.stringify(data));
 }
 
+/**
+ * Generate a secure random API token or read from environment.
+ * Token is logged once on startup so users can configure their dashboard client.
+ */
+function resolveApiToken(): string {
+  if (process.env.ANTFARM_API_TOKEN) {
+    return process.env.ANTFARM_API_TOKEN;
+  }
+  return crypto.randomBytes(32).toString("hex");
+}
+
+/**
+ * Validate the API token from request headers.
+ * Accepts: Authorization: Bearer <token>  OR  X-API-Key: <token>
+ */
+function isAuthorized(req: http.IncomingMessage, token: string): boolean {
+  const authHeader = req.headers["authorization"];
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    return authHeader.slice(7) === token;
+  }
+  const apiKeyHeader = req.headers["x-api-key"];
+  if (typeof apiKeyHeader === "string") {
+    return apiKeyHeader === token;
+  }
+  return false;
+}
+
 function serveHTML(res: http.ServerResponse) {
   const htmlPath = path.join(__dirname, "index.html");
   // In dist, index.html won't exist—serve from src
@@ -71,9 +99,21 @@ function serveHTML(res: http.ServerResponse) {
 }
 
 export function startDashboard(port = 3333): http.Server {
+  const apiToken = resolveApiToken();
+  console.log(`Antfarm Dashboard API token: ${apiToken}`);
+  console.log(`  Use header: Authorization: Bearer ${apiToken}`);
+  console.log(`  Or:         X-API-Key: ${apiToken}`);
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
     const p = url.pathname;
+
+    // Require authentication for all /api/* routes
+    if (p.startsWith("/api/")) {
+      if (!isAuthorized(req, apiToken)) {
+        return json(res, { error: "Unauthorized" }, 401);
+      }
+    }
 
     if (p === "/api/workflows") {
       return json(res, loadWorkflows());
