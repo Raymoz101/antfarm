@@ -257,7 +257,7 @@ async function loadWorkflows() {
   workflows = await fetchJSON('/api/workflows');
   const sel = document.getElementById('wf-select');
   sel.innerHTML = '<option value="">— select workflow —</option>' +
-    workflows.map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+    workflows.map(w => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join('');
   if (workflows.length === 1) {
     sel.value = workflows[0].id;
     selectWorkflow(workflows[0].id);
@@ -313,16 +313,16 @@ function renderBoard(wf, runs) {
           const badge = `badge-${run.status}`;
           const time = run.updated_at ? parseTS(run.updated_at)?.toLocaleString() || "" : '';
           const title = run.task.length > 60 ? run.task.slice(0, 57) + '…' : run.task;
-          return `<div class="card ${cls}" onclick="openRun('${run.id}')">
-            <div class="card-title" title="${run.task.replace(/"/g, '&quot;')}">${title}</div>
+          return `<div class="card ${cls}" onclick="openRun('${esc(run.id)}')">
+            <div class="card-title" title="${esc(run.task)}">${esc(title)}</div>
             <div class="card-meta">
-              <span class="badge ${badge}">${run.status}</span>
+              <span class="badge badge-${esc(run.status)}">${esc(run.status)}</span>
               <span>${time}</span>
             </div>
           </div>`;
         }).join('');
     return `<div class="column">
-      <div class="column-header">${step.id}<span class="count">${cards.length}</span></div>
+      <div class="column-header">${esc(step.id)}<span class="count">${cards.length}</span></div>
       <div class="cards">${cardHTML}</div>
     </div>`;
   }).join('');
@@ -365,9 +365,9 @@ function renderRunPanel(run) {
     return `<div class="step-row" style="flex-direction:column;align-items:stretch;gap:0;padding:0;overflow:hidden" ${toggleAttr}>
       <div style="display:flex;align-items:center;gap:8px;padding:10px 12px">
         <div class="step-icon ${st}">${icon}</div>
-        <div class="step-name" style="flex:1">${s.step_id}</div>
-        <div class="step-agent">${s.agent_id || ''}</div>
-        <div class="step-status"><span class="badge badge-${st}">${st}</span></div>
+        <div class="step-name" style="flex:1">${esc(s.step_id)}</div>
+        <div class="step-agent">${esc(s.agent_id || '')}</div>
+        <div class="step-status"><span class="badge badge-${esc(st)}">${esc(st)}</span></div>
         ${hasOutput ? '<span class="step-chevron" style="color:var(--text-secondary);font-size:10px;transition:transform .15s;display:inline-block">▶</span>' : ''}
       </div>
       ${hasOutput ? `<div class="step-details" style="display:none;padding:0 12px 12px 44px;font-size:12px;color:var(--text-tertiary);line-height:1.6">
@@ -377,10 +377,10 @@ function renderRunPanel(run) {
   }).join('');
   panel.innerHTML = `
     <button class="panel-close" onclick="closePanel()">✕</button>
-    <h2>${run.workflow_id}</h2>
+    <h2>${esc(run.workflow_id)}</h2>
     <div class="panel-task">${esc(run.task)}</div>
     <div class="panel-meta">
-      <span><span class="badge badge-${run.status}">${run.status}</span></span>
+      <span><span class="badge badge-${esc(run.status)}">${esc(run.status)}</span></span>
       <span>Created: ${created}</span>
       <span>Updated: ${updated}</span>
     </div>
@@ -472,8 +472,8 @@ async function loadStories(runId) {
           return `<div class="step-row" style="flex-direction:column;align-items:stretch;gap:0;padding:0;overflow:hidden" ${toggleAttr}>
             <div style="display:flex;align-items:center;gap:8px;padding:10px 12px">
               <div class="step-icon ${st}">${icon}</div>
-              <div class="step-name" style="flex:1">${s.story_id}: ${s.title}${retryInfo}</div>
-              <div class="step-status"><span class="badge badge-${st}">${st}</span></div>
+              <div class="step-name" style="flex:1">${esc(s.story_id)}: ${esc(s.title)}${retryInfo}</div>
+              <div class="step-status"><span class="badge badge-${esc(st)}">${esc(st)}</span></div>
               ${hasDetails ? '<span class="story-chevron" style="color:var(--text-secondary);font-size:10px;transition:transform .15s;display:inline-block">▶</span>' : ''}
             </div>
             ${hasDetails ? `<div class="story-details" style="display:none;padding:0 12px 12px 44px;font-size:12px;color:var(--text-tertiary);line-height:1.6">
