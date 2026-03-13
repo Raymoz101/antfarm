@@ -228,6 +228,7 @@ select:focus{outline:none;border-color:#8ECFC0}
 
 <script>
 const API = '';
+const API_TOKEN = null;
 let workflows = [];
 let currentWf = null;
 let openRunId = null;
@@ -249,7 +250,7 @@ function startOpenRunRefresh() {
 }
 
 async function fetchJSON(url) {
-  const r = await fetch(API + url);
+  const headers = API_TOKEN ? { 'Authorization': 'Bearer ' + API_TOKEN } : {}; const r = await fetch(API + url, { headers });
   return r.json();
 }
 
