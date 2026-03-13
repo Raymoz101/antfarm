@@ -241,10 +241,14 @@ export async function ensureWorkflowCrons(workflow: WorkflowSpec): Promise<void>
 
 /**
  * Tear down crons for a workflow when a run ends.
- * Only removes if no other active runs exist for this workflow.
+ *
+ * DISABLED: Installed workflow crons must persist even when no active runs
+ * exist — they're needed to pick up new work when runs are started.
+ * Cron lifecycle is managed by the installer (install/uninstall), not
+ * by run completion. See checkOrphanedCrons() for cleanup of truly
+ * orphaned crons from uninstalled workflows.
  */
-export async function teardownWorkflowCronsIfIdle(workflowId: string): Promise<void> {
-  const active = countActiveRuns(workflowId);
-  if (active > 0) return;
-  await removeAgentCrons(workflowId);
+export async function teardownWorkflowCronsIfIdle(_workflowId: string): Promise<void> {
+  // no-op — crons persist until workflow is uninstalled
+  return;
 }

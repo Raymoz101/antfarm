@@ -1,8 +1,10 @@
 /**
  * Medic health checks — modular functions that inspect DB state and return findings.
  */
+import fs from "node:fs";
 import { getDb } from "../db.js";
 import { getMaxRoleTimeoutSeconds } from "../installer/install.js";
+import { resolveWorkflowDir } from "../installer/paths.js";
 
 export type MedicSeverity = "info" | "warning" | "critical";
 export type MedicActionType =
@@ -71,35 +73,46 @@ export function checkStuckSteps(): MedicFinding[] {
 const STALL_THRESHOLD_MS = MAX_ROLE_TIMEOUT_MS * 2;
 
 /**
- * Find runs where no step has transitioned in 2x the max role timeout.
- * This catches systemic issues (all agents broken, crons failing, etc).
+ * Find runs where no step OR story has progressed in 2x the max role timeout.
+ * Checks both step transitions and story-level progress, so multi-story
+ * implement steps (which can run for hours) don't trigger false positives
+ * as long as stories keep completing.
  */
 export function checkStalledRuns(): MedicFinding[] {
   const db = getDb();
   const findings: MedicFinding[] = [];
 
-  // Get running runs where the most recent step update is stale
+  // Get running runs where BOTH the most recent step update AND story update are stale.
+  // A run is only stalled if neither steps nor stories have progressed recently.
   const stalled = db.prepare(`
     SELECT r.id, r.workflow_id, r.task, r.updated_at,
-           MAX(s.updated_at) as last_step_update
+           MAX(s.updated_at) as last_step_update,
+           (SELECT MAX(st.updated_at) FROM stories st WHERE st.run_id = r.id) as last_story_update
     FROM runs r
     JOIN steps s ON s.run_id = r.id
     WHERE r.status = 'running'
     GROUP BY r.id
-    HAVING (julianday('now') - julianday(MAX(s.updated_at))) * 86400000 > ?
+    HAVING (julianday('now') - julianday(
+      MAX(
+        COALESCE(MAX(s.updated_at), '2000-01-01'),
+        COALESCE((SELECT MAX(st.updated_at) FROM stories st WHERE st.run_id = r.id), '2000-01-01')
+      )
+    )) * 86400000 > ?
   `).all(STALL_THRESHOLD_MS) as Array<{
     id: string; workflow_id: string; task: string;
-    updated_at: string; last_step_update: string;
+    updated_at: string; last_step_update: string; last_story_update: string | null;
   }>;
 
   for (const run of stalled) {
+    const latestUpdate = run.last_story_update && run.last_story_update > run.last_step_update
+      ? run.last_story_update : run.last_step_update;
     const ageMin = Math.round(
-      (Date.now() - new Date(run.last_step_update).getTime()) / 60000
+      (Date.now() - new Date(latestUpdate).getTime()) / 60000
     );
     findings.push({
       check: "stalled_runs",
       severity: "critical",
-      message: `Run ${run.id.slice(0, 8)} (${run.workflow_id}: "${run.task.slice(0, 60)}") has had no step progress for ${ageMin}min`,
+      message: `Run ${run.id.slice(0, 8)} (${run.workflow_id}: "${run.task.slice(0, 60)}") has had no step or story progress for ${ageMin}min`,
       action: "none", // alert only — don't auto-fail without human input
       runId: run.id,
       remediated: false,
@@ -177,20 +190,19 @@ export function checkOrphanedCrons(
   }
 
   for (const wfId of workflowIds) {
-    const active = db.prepare(
-      "SELECT COUNT(*) as cnt FROM runs WHERE workflow_id = ? AND status = 'running'"
-    ).get(wfId) as { cnt: number };
+    // Only flag crons as orphaned if the workflow is NOT installed.
+    // Installed workflows keep their crons regardless of active runs —
+    // they need them to pick up new work when runs are started.
+    if (fs.existsSync(resolveWorkflowDir(wfId))) continue;
 
-    if (active.cnt === 0) {
-      const jobCount = cronJobs.filter(j => j.name.startsWith(`antfarm/${wfId}/`)).length;
-      findings.push({
-        check: "orphaned_crons",
-        severity: "warning",
-        message: `${jobCount} cron job(s) for workflow "${wfId}" still running but no active runs exist`,
-        action: "teardown_crons",
-        remediated: false,
-      });
-    }
+    const jobCount = cronJobs.filter(j => j.name.startsWith(`antfarm/${wfId}/`)).length;
+    findings.push({
+      check: "orphaned_crons",
+      severity: "warning",
+      message: `${jobCount} cron job(s) for uninstalled workflow "${wfId}" — should be cleaned up`,
+      action: "teardown_crons",
+      remediated: false,
+    });
   }
 
   return findings;
