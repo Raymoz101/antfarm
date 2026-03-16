@@ -124,6 +124,12 @@ type CronJobDefinition = {
 };
 
 function isLikelyTestCronJob(job: CronJobDefinition): boolean {
+  // If the process is running inside a test environment (NODE_ENV=test or
+  // ANTFARM_TEST=1), treat every job as a test job so no live gateway is
+  // ever mutated even if a mock HTTP path accidentally falls through.
+  if (process.env.NODE_ENV === "test" || process.env.ANTFARM_TEST === "1") {
+    return true;
+  }
   const name = job.name.toLowerCase();
   const agentId = job.agentId.toLowerCase();
   return (
@@ -209,6 +215,9 @@ export async function createAgentCronJob(job: CronJobDefinition): Promise<{ ok: 
 
 /** HTTP-only attempt. Returns null on 404 (signals: use CLI fallback). */
 async function createAgentCronJobHTTP(job: CronJobDefinition): Promise<{ ok: boolean; error?: string; id?: string } | null> {
+  // In a test environment, never make real HTTP requests to the gateway.
+  // This prevents live gateway mutations if a mocked fetch path falls through.
+  if (process.env.ANTFARM_TEST === "1") return null;
   const gateway = await getGatewayConfig();
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
