@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
@@ -110,7 +111,10 @@ const UPDATE_HINT =
 
 function isTransientGatewayFailure(status: number | undefined): boolean {
   if (status === undefined) return true;
-  return status === 404 || status >= 500;
+  // 401: gateway auth misconfiguration — fall back to CLI rather than hard-failing
+  // 404: endpoint not found (older gateway version) — use CLI fallback
+  // 5xx: server error — transient, use CLI fallback
+  return status === 401 || status === 404 || status >= 500;
 }
 
 type CronJobDefinition = {
@@ -166,6 +170,9 @@ export async function createAgentCronJob(job: CronJobDefinition): Promise<{ ok: 
   if (httpResult !== null) return httpResult;
 
   // --- Fallback to CLI ---
+  // Use a temp file for the message payload to avoid OS argument-length limits
+  // (agent prompts can be several KB and exceed ARG_MAX on some systems).
+  let tmpMsgFile: string | undefined;
   try {
     const args = ["cron", "add", "--json", "--name", job.name];
 
@@ -180,7 +187,10 @@ export async function createAgentCronJob(job: CronJobDefinition): Promise<{ ok: 
     }
 
     if (job.payload?.message) {
-      args.push("--message", job.payload.message);
+      // Write to a temp file and pass --message-file to avoid huge CLI arguments
+      tmpMsgFile = path.join(os.tmpdir(), `antfarm-cron-msg-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+      fsSync.writeFileSync(tmpMsgFile, job.payload.message, "utf-8");
+      args.push("--message-file", tmpMsgFile);
     }
 
     if (job.payload?.timeoutSeconds) {
@@ -210,6 +220,10 @@ export async function createAgentCronJob(job: CronJobDefinition): Promise<{ ok: 
     }
   } catch (err) {
     return { ok: false, error: `CLI fallback failed: ${err}. ${UPDATE_HINT}` };
+  } finally {
+    if (tmpMsgFile) {
+      try { fsSync.unlinkSync(tmpMsgFile); } catch { /* best-effort cleanup */ }
+    }
   }
 }
 
@@ -286,13 +300,14 @@ export async function checkCronToolAvailable(): Promise<{ ok: boolean; error?: s
   }
 }
 
-export async function listCronJobs(): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string }>; error?: string }> {
+export async function listCronJobs(opts: { includeDisabled?: boolean } = {}): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string }>; error?: string }> {
   // --- Try HTTP first ---
-  const httpResult = await listCronJobsHTTP();
+  const httpResult = await listCronJobsHTTP(opts);
   if (httpResult !== null) return httpResult;
 
   // --- CLI fallback ---
   try {
+    // Always pass --all so disabled crons are visible (matches HTTP includeDisabled behaviour)
     const stdout = await runCli(["cron", "list", "--json", "--all"]);
     const parsed = JSON.parse(stdout);
     const jobs: Array<{ id: string; name: string }> = parsed.jobs ?? parsed ?? [];
@@ -303,7 +318,9 @@ export async function listCronJobs(): Promise<{ ok: boolean; jobs?: Array<{ id: 
 }
 
 /** HTTP-only list. Returns null on 404/network error. */
-async function listCronJobsHTTP(): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string }>; error?: string } | null> {
+async function listCronJobsHTTP(opts: { includeDisabled?: boolean } = {}): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string }>; error?: string } | null> {
+  // Default to true so internal callers (e.g. workflowCronsExist) see disabled crons
+  const includeDisabled = opts.includeDisabled ?? true;
   const gateway = await getGatewayConfig();
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -312,7 +329,7 @@ async function listCronJobsHTTP(): Promise<{ ok: boolean; jobs?: Array<{ id: str
     const response = await fetch(`${gateway.url}/tools/invoke`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ tool: "cron", args: { action: "list" }, sessionKey: "agent:main:main" }),
+      body: JSON.stringify({ tool: "cron", args: { action: "list", includeDisabled }, sessionKey: "agent:main:main" }),
     });
 
     if (isTransientGatewayFailure(response.status)) return null;

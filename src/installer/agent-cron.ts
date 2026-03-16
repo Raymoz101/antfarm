@@ -180,12 +180,23 @@ export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
     const prompt = buildPollingPrompt(workflow.id, agent.id, workModel);
     const timeoutSeconds = workflowPollingTimeout;
 
+    // Omit model from payload when it is "default" or falsy — the gateway/CLI
+    // will apply the agent's configured default, avoiding the literal string
+    // "default" leaking into the cron job definition.
+    const resolvedModel =
+      pollingModel && pollingModel !== "default" ? pollingModel : undefined;
+
     const result = await createAgentCronJob({
       name: cronName,
       schedule: { kind: "every", everyMs, anchorMs },
       sessionTarget: "isolated",
       agentId,
-      payload: { kind: "agentTurn", message: prompt, model: pollingModel, timeoutSeconds },
+      payload: {
+        kind: "agentTurn",
+        message: prompt,
+        ...(resolvedModel ? { model: resolvedModel } : {}),
+        timeoutSeconds,
+      },
       delivery: { mode: "none" },
       enabled: true,
     });

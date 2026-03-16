@@ -89,13 +89,17 @@ function isAuthorized(req: http.IncomingMessage, token: string): boolean {
   return false;
 }
 
-function serveHTML(res: http.ServerResponse) {
+function serveHTML(res: http.ServerResponse, apiToken: string) {
   const htmlPath = path.join(__dirname, "index.html");
   // In dist, index.html won't exist—serve from src
   const srcHtmlPath = path.resolve(__dirname, "..", "..", "src", "server", "index.html");
   const filePath = fs.existsSync(htmlPath) ? htmlPath : srcHtmlPath;
+  const html = fs.readFileSync(filePath, "utf-8").replace(
+    "const API_TOKEN = null;",
+    `const API_TOKEN = ${JSON.stringify(apiToken)};`
+  );
   res.writeHead(200, { "Content-Type": "text/html" });
-  res.end(fs.readFileSync(filePath, "utf-8"));
+  res.end(html);
 }
 
 export function startDashboard(port = 3333): http.Server {
@@ -178,7 +182,7 @@ export function startDashboard(port = 3333): http.Server {
     }
 
     // Serve frontend
-    serveHTML(res);
+    serveHTML(res, apiToken);
   });
 
   server.listen(port, () => {
