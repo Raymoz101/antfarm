@@ -6,7 +6,7 @@
  */
 import { getDb } from "../db.js";
 import { emitEvent, type EventType } from "../installer/events.js";
-import { teardownWorkflowCronsIfIdle } from "../installer/agent-cron.js";
+import { teardownWorkflowCronsIfIdle, removeAgentCrons } from "../installer/agent-cron.js";
 import { listCronJobs } from "../installer/gateway-api.js";
 import {
   runSyncChecks,
@@ -77,7 +77,11 @@ async function remediate(finding: MedicFinding): Promise<boolean> {
       const match = finding.message.match(/workflow "([^"]+)"/);
       if (!match) return false;
       try {
-        await teardownWorkflowCronsIfIdle(match[1]);
+        // For uninstalled workflows, hard-delete their agent crons.
+        // `teardownWorkflowCronsIfIdle()` is intentionally a no-op for installed
+        // workflows because worker crons persist while idle; that logic does NOT
+        // apply to orphaned crons from workflows that no longer exist.
+        await removeAgentCrons(match[1]);
         return true;
       } catch {
         return false;
