@@ -54,6 +54,8 @@ export type WorkflowStep = {
   loop?: LoopConfig;
   input: string;
   expects: string;
+  /** Output keys this step is required to produce. Validated in completeStep(). */
+  produces?: string[];
   max_retries?: number;
   on_fail?: WorkflowStepFailure;
 };

@@ -13,6 +13,7 @@ import {
   checkOrphanedCrons,
   type MedicFinding,
 } from "./checks.js";
+import { resetAbandonedStep } from "../installer/step-ops.js";
 import crypto from "node:crypto";
 
 // ── DB Migration ────────────────────────────────────────────────────
@@ -41,46 +42,10 @@ async function remediate(finding: MedicFinding): Promise<boolean> {
 
   switch (finding.action) {
     case "reset_step": {
-      if (!finding.stepId) return false;
-      // Reset the stuck step to pending so it can be reclaimed
-      const step = db.prepare(
-        "SELECT abandoned_count FROM steps WHERE id = ?"
-      ).get(finding.stepId) as { abandoned_count: number } | undefined;
-      if (!step) return false;
-
-      const newCount = (step.abandoned_count ?? 0) + 1;
-      // Don't auto-reset if already abandoned too many times — let cleanupAbandonedSteps handle final failure
-      if (newCount >= 5) {
-        db.prepare(
-          "UPDATE steps SET status = 'failed', output = 'Medic: abandoned too many times', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
-        ).run(newCount, finding.stepId);
-        if (finding.runId) {
-          db.prepare(
-            "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
-          ).run(finding.runId);
-          emitEvent({
-            ts: new Date().toISOString(),
-            event: "run.failed" as EventType,
-            runId: finding.runId,
-            detail: "Medic: step abandoned too many times",
-          });
-        }
-        return true;
-      }
-
-      db.prepare(
-        "UPDATE steps SET status = 'pending', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
-      ).run(newCount, finding.stepId);
-      if (finding.runId) {
-        emitEvent({
-          ts: new Date().toISOString(),
-          event: "step.timeout" as EventType,
-          runId: finding.runId,
-          stepId: finding.stepId,
-          detail: `Medic: reset stuck step (abandon ${newCount}/5)`,
-        });
-      }
-      return true;
+      if (!finding.stepId || !finding.runId) return false;
+      // Delegate to the shared resetAbandonedStep() so recovery logic lives in one place.
+      const outcome = resetAbandonedStep(finding.stepId, finding.runId);
+      return outcome !== "skipped";
     }
 
     case "fail_run": {

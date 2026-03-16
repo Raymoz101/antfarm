@@ -267,6 +267,66 @@ const ABANDONED_THRESHOLD_MS = (getMaxRoleTimeoutSeconds() + 5 * 60) * 1000; // 
 const MAX_ABANDON_RESETS = 5; // abandoned steps get more chances than explicit failures
 
 /**
+ * Reset a single orphaned running step to pending, or fail it if abandon limit reached.
+ *
+ * This is the conservative recovery path for Goal 2: when a step is found to be
+ * "running" with no live worker attached (detected by age or by external health check),
+ * we reset it rather than letting it hang forever.
+ *
+ * - Conservative: only acts on single steps; loop steps with an active story are
+ *   handled by cleanupAbandonedSteps() which understands per-story retry counters.
+ * - Safe: does not touch steps for failed/cancelled runs.
+ * - Exported so medic and health-check crons can call it directly without going
+ *   through claimStep() and its 5-minute throttle.
+ *
+ * Returns "reset" | "failed" | "skipped".
+ */
+export function resetAbandonedStep(
+  stepId: string,
+  runId: string
+): "reset" | "failed" | "skipped" {
+  const db = getDb();
+
+  // Safety: don't touch steps belonging to terminal runs
+  const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string } | undefined;
+  if (!run || run.status === "failed" || run.status === "cancelled" || run.status === "completed") {
+    return "skipped";
+  }
+
+  const step = db.prepare(
+    "SELECT id, step_id, status, type, current_story_id, abandoned_count FROM steps WHERE id = ? AND run_id = ?"
+  ).get(stepId, runId) as { id: string; step_id: string; status: string; type: string; current_story_id: string | null; abandoned_count: number } | undefined;
+
+  if (!step || step.status !== "running") return "skipped";
+
+  // Loop steps with an active story: defer to cleanupAbandonedSteps() which applies
+  // per-story retry logic. Resetting here could corrupt story state.
+  if (step.type === "loop" && step.current_story_id) return "skipped";
+
+  const newCount = (step.abandoned_count ?? 0) + 1;
+  const wfId = getWorkflowId(runId);
+
+  if (newCount >= MAX_ABANDON_RESETS) {
+    db.prepare(
+      "UPDATE steps SET status = 'failed', output = 'Agent abandoned step without completing (' || ? || ' times)', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(newCount, newCount, step.id);
+    db.prepare("UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?").run(runId);
+    emitEvent({ ts: new Date().toISOString(), event: "step.timeout", runId, workflowId: wfId, stepId: step.step_id, detail: "Retries exhausted — step failed" });
+    emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId, workflowId: wfId, stepId: step.step_id, detail: "Agent abandoned step without completing" });
+    emitEvent({ ts: new Date().toISOString(), event: "run.failed", runId, workflowId: wfId, detail: "Step abandoned and retries exhausted" });
+    scheduleRunCronTeardown(runId);
+    return "failed";
+  }
+
+  db.prepare(
+    "UPDATE steps SET status = 'pending', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(newCount, step.id);
+  emitEvent({ ts: new Date().toISOString(), event: "step.timeout", runId, workflowId: wfId, stepId: step.step_id, detail: `Reset to pending (abandon ${newCount}/${MAX_ABANDON_RESETS})` });
+  logger.info(`Orphaned step reset to pending (abandon ${newCount})`, { runId, stepId: step.step_id });
+  return "reset";
+}
+
+/**
  * Find steps that have been "running" for too long and reset them to pending.
  * This catches cases where an agent claimed a step but never completed/failed it.
  * Exported so it can be called from medic/health-check crons independently of claimStep.
@@ -681,8 +741,8 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
   const db = getDb();
 
   const step = db.prepare(
-    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id FROM steps WHERE id = ?"
-  ).get(stepId) as { id: string; run_id: string; step_id: string; step_index: number; type: string; loop_config: string | null; current_story_id: string | null } | undefined;
+    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id, produces_keys, retry_count, max_retries FROM steps WHERE id = ?"
+  ).get(stepId) as { id: string; run_id: string; step_id: string; step_index: number; type: string; loop_config: string | null; current_story_id: string | null; produces_keys: string | null; retry_count: number; max_retries: number } | undefined;
 
   if (!step) throw new Error(`Step not found: ${stepId}`);
 
@@ -708,6 +768,30 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
 
   // T5: Parse STORIES_JSON from output (any step, typically the planner)
   parseAndInsertStories(output, step.run_id);
+
+  // Handoff validation: verify that output contains all required produces_keys.
+  // Only validate single steps (loop steps have variable per-story output structure).
+  if (step.produces_keys && step.type !== "loop") {
+    const requiredKeys: string[] = JSON.parse(step.produces_keys);
+    const missingKeys = requiredKeys.filter(k => !Object.prototype.hasOwnProperty.call(parsed, k));
+    if (missingKeys.length > 0) {
+      const errorMsg = `Step "${step.step_id}" output is missing required field(s): ${missingKeys.join(", ")}. Fix the step output and retry.`;
+      logger.warn(`Handoff validation failed for step ${step.step_id}: missing ${missingKeys.join(", ")}`, { runId: step.run_id });
+      const newRetry = step.retry_count + 1;
+      const wfId = getWorkflowId(step.run_id);
+      if (newRetry > step.max_retries) {
+        db.prepare("UPDATE steps SET status = 'failed', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?").run(errorMsg, newRetry, step.id);
+        db.prepare("UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?").run(step.run_id);
+        emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: errorMsg });
+        emitEvent({ ts: new Date().toISOString(), event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Step output missing required fields — retries exhausted" });
+        scheduleRunCronTeardown(step.run_id);
+      } else {
+        db.prepare("UPDATE steps SET status = 'pending', retry_count = ?, updated_at = datetime('now') WHERE id = ?").run(newRetry, step.id);
+        emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: errorMsg });
+      }
+      return { advanced: false, runCompleted: false };
+    }
+  }
 
   // T7: Loop step completion
   if (step.type === "loop" && step.current_story_id) {
