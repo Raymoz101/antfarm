@@ -96,6 +96,13 @@ describe("two-phase-integration", () => {
       assert.ok(prompt.includes("step fail with an explanation"));
     });
 
+    it("uses step-specific completion guidance instead of generic CHANGES/TESTS output", () => {
+      const prompt = buildWorkPrompt("bug-fix", "triager");
+      assert.ok(prompt.includes('Reply with:" contract exactly'));
+      assert.ok(prompt.includes("Do NOT substitute generic fields like CHANGES or TESTS"));
+      assert.ok(!prompt.includes("STATUS: done\nCHANGES: what you did\nTESTS: what tests you ran"));
+    });
+
     it("does NOT contain step claim (Phase 1 handles claiming)", () => {
       const prompt = buildWorkPrompt("feature-dev", "developer");
       assert.ok(!prompt.includes("step claim"));
