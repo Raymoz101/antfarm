@@ -72,6 +72,8 @@ export async function installMedicCron(): Promise<{ ok: boolean; error?: string 
   // Ensure agent is provisioned in OpenClaw config
   await ensureMedicAgent();
 
+  // MEDIC_MODEL is "default" — omit model so the gateway uses the agent's
+  // configured default rather than passing the literal string "default".
   const result = await createAgentCronJob({
     name: MEDIC_CRON_NAME,
     schedule: { kind: "every", everyMs: MEDIC_EVERY_MS },
@@ -80,7 +82,6 @@ export async function installMedicCron(): Promise<{ ok: boolean; error?: string 
     payload: {
       kind: "agentTurn",
       message: buildMedicPrompt(),
-      model: MEDIC_MODEL,
       timeoutSeconds: MEDIC_TIMEOUT_SECONDS,
     },
     delivery: { mode: "none" },

@@ -116,6 +116,8 @@ function printUsage() {
       "antfarm medic status                 Show medic health summary",
       "antfarm medic log [<count>]          Show recent medic check history",
       "",
+      "antfarm cron list [--all]            List cron jobs (--all includes disabled)",
+      "",
       "antfarm logs [<lines>]               Show recent activity (from events)",
       "antfarm logs <run-id>                Show activity for a specific run",
       "",
@@ -210,6 +212,13 @@ async function main() {
     }
     ensureCliSymlink();
     console.log(`\nDone. Start a workflow with: antfarm workflow run <name> "your task"`);
+
+    // Ensure medic cron is installed (idempotent)
+    try {
+      await installMedicCron();
+    } catch {
+      // best-effort — operator can run `antfarm medic install` manually
+    }
 
     // Auto-start dashboard if not already running
     if (!isRunning().running) {
@@ -447,6 +456,26 @@ async function main() {
     const events = getRecentEvents(limit);
     printEvents(events);
     return;
+  }
+
+  if (group === "cron") {
+    if (action === "list") {
+      const { listCronJobs } = await import("../installer/gateway-api.js");
+      const includeDisabled = args.includes("--all");
+      const result = await listCronJobs({ includeDisabled: includeDisabled || true });
+      if (!result.ok) {
+        process.stderr.write(`Failed to list crons: ${result.error}\n`);
+        process.exit(1);
+      }
+      const jobs = result.jobs ?? [];
+      if (jobs.length === 0) { console.log("No cron jobs found."); return; }
+      for (const job of jobs) {
+        console.log(`  ${job.id.padEnd(36)}  ${job.name}`);
+      }
+      return;
+    }
+    printUsage();
+    process.exit(1);
   }
 
   if (args.length < 2) { printUsage(); process.exit(1); }
