@@ -40,4 +40,11 @@ describe("buildWorkPrompt", () => {
     assert.ok(!p1.includes("step claim"));
     assert.ok(!p2.includes("step claim"));
   });
+
+  it("requires step-specific output instead of hardcoded generic fields", () => {
+    const prompt = buildWorkPrompt("bug-fix", "triager");
+    assert.ok(prompt.includes('Reply with:" section'));
+    assert.ok(prompt.includes("Do NOT substitute generic fields like CHANGES or TESTS"));
+    assert.ok(!prompt.includes("STATUS: done\nCHANGES: what you did\nTESTS: what tests you ran"));
+  });
 });

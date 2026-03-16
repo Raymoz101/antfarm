@@ -26,17 +26,21 @@ Step 2 — If JSON is returned, it contains: {"stepId": "...", "runId": "...", "
 Save the stepId — you'll need it to report completion.
 The "input" field contains your FULLY RESOLVED task instructions. Read it carefully and DO the work.
 
-Step 3 — Do the work described in the input. Format your output with KEY: value lines as specified.
+Step 3 — Do the work described in the input. Format your output with the EXACT KEY: value lines required by the claimed step input.
 
 Step 4 — MANDATORY: Report completion (do this IMMEDIATELY after finishing the work):
 \`\`\`
 cat <<'ANTFARM_EOF' > /tmp/antfarm-step-output.txt
-STATUS: done
-CHANGES: what you did
-TESTS: what tests you ran
+<copy the exact step-specific KEY: value output required by the input's "Reply with:" section>
 ANTFARM_EOF
 cat /tmp/antfarm-step-output.txt | node ${cli} step complete "<stepId>"
 \`\`\`
+
+CRITICAL OUTPUT RULES:
+- Follow the claimed step input's "Reply with:" contract exactly
+- Do NOT substitute generic fields like CHANGES or TESTS unless the input explicitly asks for them
+- If the input requires REPO / BRANCH / SEVERITY / AFFECTED_AREA / REPRODUCTION / PROBLEM_STATEMENT, emit those exact keys
+- If the input requires ROOT_CAUSE / FIX_APPROACH, REGRESSION_TEST, or VERIFIED, emit those exact keys
 
 If the work FAILED:
 \`\`\`
@@ -63,17 +67,21 @@ The claimed step JSON is provided below. It contains: {"stepId": "...", "runId":
 Save the stepId — you'll need it to report completion.
 The "input" field contains your FULLY RESOLVED task instructions. Read it carefully and DO the work.
 
-Do the work described in the input. Format your output with KEY: value lines as specified.
+Do the work described in the input. Format your output with the EXACT KEY: value lines required by the claimed step input.
 
 MANDATORY: Report completion (do this IMMEDIATELY after finishing the work):
 \`\`\`
 cat <<'ANTFARM_EOF' > /tmp/antfarm-step-output.txt
-STATUS: done
-CHANGES: what you did
-TESTS: what tests you ran
+<copy the exact step-specific KEY: value output required by the input's "Reply with:" section>
 ANTFARM_EOF
 cat /tmp/antfarm-step-output.txt | node ${cli} step complete "<stepId>"
 \`\`\`
+
+CRITICAL OUTPUT RULES:
+- Follow the claimed step input's "Reply with:" contract exactly
+- Do NOT substitute generic fields like CHANGES or TESTS unless the input explicitly asks for them
+- If the input requires REPO / BRANCH / SEVERITY / AFFECTED_AREA / REPRODUCTION / PROBLEM_STATEMENT, emit those exact keys
+- If the input requires ROOT_CAUSE / FIX_APPROACH, REGRESSION_TEST, or VERIFIED, emit those exact keys
 
 If the work FAILED:
 \`\`\`
