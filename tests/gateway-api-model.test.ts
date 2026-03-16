@@ -46,6 +46,8 @@ describe("gateway-api model parameter support", () => {
       const callArgs = fetchMock.mock.calls[0].arguments;
       const body = JSON.parse(callArgs[1].body);
       assert.equal(body.args.job.payload.model, "claude-sonnet-4-20250514");
+      assert.equal(body.args.job.delivery.mode, "none");
+      assert.equal(body.args.job.enabled, false);
     } finally {
       globalThis.fetch = originalFetch;
     }

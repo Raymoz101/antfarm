@@ -113,11 +113,7 @@ function isTransientGatewayFailure(status: number | undefined): boolean {
   return status === 404 || status >= 500;
 }
 
-// ---------------------------------------------------------------------------
-// Cron operations — HTTP first, CLI fallback
-// ---------------------------------------------------------------------------
-
-export async function createAgentCronJob(job: {
+type CronJobDefinition = {
   name: string;
   schedule: { kind: string; everyMs?: number; anchorMs?: number };
   sessionTarget: string;
@@ -125,9 +121,42 @@ export async function createAgentCronJob(job: {
   payload: { kind: string; message: string; model?: string; timeoutSeconds?: number };
   delivery?: { mode: "none" | "announce"; channel?: string; to?: string };
   enabled: boolean;
-}): Promise<{ ok: boolean; error?: string; id?: string }> {
+};
+
+function isLikelyTestCronJob(job: CronJobDefinition): boolean {
+  const name = job.name.toLowerCase();
+  const agentId = job.agentId.toLowerCase();
+  return (
+    name.startsWith("test/") ||
+    name.startsWith("test-") ||
+    name.startsWith("test_") ||
+    agentId === "test-agent" ||
+    agentId.startsWith("test-") ||
+    agentId.startsWith("test_")
+  );
+}
+
+function sanitizeCronJob(job: CronJobDefinition): CronJobDefinition {
+  if (!isLikelyTestCronJob(job)) return job;
+
+  // Safety rail: test-created cron jobs should never announce into real channels
+  // or keep running if they accidentally hit a live gateway.
+  return {
+    ...job,
+    enabled: false,
+    delivery: { mode: "none" },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cron operations — HTTP first, CLI fallback
+// ---------------------------------------------------------------------------
+
+export async function createAgentCronJob(job: CronJobDefinition): Promise<{ ok: boolean; error?: string; id?: string }> {
+  const safeJob = sanitizeCronJob(job);
+
   // --- Try HTTP first ---
-  const httpResult = await createAgentCronJobHTTP(job);
+  const httpResult = await createAgentCronJobHTTP(safeJob);
   if (httpResult !== null) return httpResult;
 
   // --- Fallback to CLI ---
@@ -179,15 +208,7 @@ export async function createAgentCronJob(job: {
 }
 
 /** HTTP-only attempt. Returns null on 404 (signals: use CLI fallback). */
-async function createAgentCronJobHTTP(job: {
-  name: string;
-  schedule: { kind: string; everyMs?: number; anchorMs?: number };
-  sessionTarget: string;
-  agentId: string;
-  payload: { kind: string; message: string; model?: string; timeoutSeconds?: number };
-  delivery?: { mode: "none" | "announce"; channel?: string; to?: string };
-  enabled: boolean;
-}): Promise<{ ok: boolean; error?: string; id?: string } | null> {
+async function createAgentCronJobHTTP(job: CronJobDefinition): Promise<{ ok: boolean; error?: string; id?: string } | null> {
   const gateway = await getGatewayConfig();
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
