@@ -176,15 +176,37 @@ export function checkDeadRuns(): MedicFinding[] {
  * NOTE: This check requires the list of current cron jobs to be passed in,
  * since reading crons is async (gateway API). The medic runner handles this.
  */
+function isLikelyTestWorkflowCron(job: { name: string; agentId?: string }): boolean {
+  const name = job.name.toLowerCase();
+  const agentId = (job.agentId ?? "").toLowerCase();
+  const match = name.match(/^antfarm\/([^/]+)\/([^/]+)/);
+  const workflowId = match?.[1]?.toLowerCase() ?? "";
+  const roleId = match?.[2]?.toLowerCase() ?? "";
+
+  return (
+    workflowId === "test-wf" ||
+    workflowId.startsWith("test-") ||
+    workflowId.startsWith("test_") ||
+    roleId === "test-agent" ||
+    roleId.startsWith("test-") ||
+    roleId.startsWith("test_") ||
+    agentId === "test-agent" ||
+    agentId.startsWith("test-") ||
+    agentId.startsWith("test_")
+  );
+}
+
 export function checkOrphanedCrons(
-  cronJobs: Array<{ id: string; name: string }>,
+  cronJobs: Array<{ id: string; name: string; agentId?: string }>,
 ): MedicFinding[] {
   const db = getDb();
   const findings: MedicFinding[] = [];
 
+  const relevantJobs = cronJobs.filter(job => !isLikelyTestWorkflowCron(job));
+
   // Extract unique workflow IDs from antfarm cron job names
   const workflowIds = new Set<string>();
-  for (const job of cronJobs) {
+  for (const job of relevantJobs) {
     const match = job.name.match(/^antfarm\/([^/]+)\//);
     if (match) workflowIds.add(match[1]);
   }
@@ -195,7 +217,7 @@ export function checkOrphanedCrons(
     // they need them to pick up new work when runs are started.
     if (fs.existsSync(resolveWorkflowDir(wfId))) continue;
 
-    const jobCount = cronJobs.filter(j => j.name.startsWith(`antfarm/${wfId}/`)).length;
+    const jobCount = relevantJobs.filter(j => j.name.startsWith(`antfarm/${wfId}/`)).length;
     findings.push({
       check: "orphaned_crons",
       severity: "warning",

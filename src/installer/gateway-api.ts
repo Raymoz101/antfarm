@@ -158,11 +158,31 @@ function sanitizeCronJob(job: CronJobDefinition): CronJobDefinition {
   };
 }
 
+function shouldSkipLikelyTestCronCreation(job: CronJobDefinition): boolean {
+  // In real runtimes, if an Antfarm workflow test cron reaches the production
+  // gateway path, don't create it at all. This is stronger than sanitization:
+  // it prevents disabled orphan crumbs like `antfarm/test-wf/test-agent` from
+  // ever being written to the live cron store and later rediscovered by Medic.
+  //
+  // Keep the broader sanitize-only behavior for generic `test/...` jobs so the
+  // existing gateway-api test suite can still inspect mocked request payloads.
+  // In explicit test environments we also never skip creation.
+  const inExplicitTestEnv = process.env.NODE_ENV === "test" || process.env.ANTFARM_TEST === "1";
+  if (inExplicitTestEnv) return false;
+
+  const name = job.name.toLowerCase();
+  return name.startsWith("antfarm/test-") || name.startsWith("antfarm/test_");
+}
+
 // ---------------------------------------------------------------------------
 // Cron operations — HTTP first, CLI fallback
 // ---------------------------------------------------------------------------
 
 export async function createAgentCronJob(job: CronJobDefinition): Promise<{ ok: boolean; error?: string; id?: string }> {
+  if (shouldSkipLikelyTestCronCreation(job)) {
+    return { ok: true };
+  }
+
   const safeJob = sanitizeCronJob(job);
 
   // --- Try HTTP first ---

@@ -1,4 +1,4 @@
-import { describe, it, mock, beforeEach } from "node:test";
+import { describe, it, mock, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
 // We test the exported createAgentCronJob function's type interface
@@ -7,11 +7,25 @@ import assert from "node:assert/strict";
 
 describe("gateway-api model parameter support", () => {
   let createAgentCronJob: typeof import("../dist/installer/gateway-api.js").createAgentCronJob;
+  let savedNodeEnv: string | undefined;
+  let savedAntfarmTest: string | undefined;
 
   beforeEach(async () => {
+    savedNodeEnv = process.env.NODE_ENV;
+    savedAntfarmTest = process.env.ANTFARM_TEST;
+    process.env.NODE_ENV = "production";
+    delete process.env.ANTFARM_TEST;
+
     // Re-import to get fresh module
-    const mod = await import("../dist/installer/gateway-api.js");
+    const mod = await import(`../dist/installer/gateway-api.js?v=${Date.now()}-${Math.random()}`);
     createAgentCronJob = mod.createAgentCronJob;
+  });
+
+  afterEach(() => {
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
+    if (savedAntfarmTest === undefined) delete process.env.ANTFARM_TEST;
+    else process.env.ANTFARM_TEST = savedAntfarmTest;
   });
 
   it("accepts payload with model parameter", async () => {

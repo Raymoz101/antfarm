@@ -16,8 +16,15 @@ describe("gateway-api password auth mode (#116)", () => {
   const configDir = path.join(os.homedir(), ".openclaw");
   const configPath = path.join(configDir, "openclaw.json");
   let originalConfig: string | null = null;
+  let savedNodeEnv: string | undefined;
+  let savedAntfarmTest: string | undefined;
 
   beforeEach(() => {
+    savedNodeEnv = process.env.NODE_ENV;
+    savedAntfarmTest = process.env.ANTFARM_TEST;
+    process.env.NODE_ENV = "production";
+    delete process.env.ANTFARM_TEST;
+
     // Back up the real config
     try {
       originalConfig = fs.readFileSync(configPath, "utf-8");
@@ -31,6 +38,10 @@ describe("gateway-api password auth mode (#116)", () => {
     if (originalConfig !== null) {
       fs.writeFileSync(configPath, originalConfig, "utf-8");
     }
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
+    if (savedAntfarmTest === undefined) delete process.env.ANTFARM_TEST;
+    else process.env.ANTFARM_TEST = savedAntfarmTest;
     // Clean up env var if set
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   });

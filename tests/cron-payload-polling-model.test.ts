@@ -14,10 +14,16 @@ import assert from "node:assert/strict";
 describe("cron payload includes polling model + execution timeout", () => {
   let capturedJobs: any[];
   let originalFetch: typeof globalThis.fetch;
+  let savedNodeEnv: string | undefined;
+  let savedAntfarmTest: string | undefined;
 
   beforeEach(() => {
     capturedJobs = [];
     originalFetch = globalThis.fetch;
+    savedNodeEnv = process.env.NODE_ENV;
+    savedAntfarmTest = process.env.ANTFARM_TEST;
+    process.env.NODE_ENV = "production";
+    delete process.env.ANTFARM_TEST;
     globalThis.fetch = mock.fn(async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
       if (body.args?.job) capturedJobs.push(body.args.job);
@@ -31,14 +37,18 @@ describe("cron payload includes polling model + execution timeout", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
+    if (savedAntfarmTest === undefined) delete process.env.ANTFARM_TEST;
+    else process.env.ANTFARM_TEST = savedAntfarmTest;
   });
 
   it("setupAgentCrons passes polling model in payload and uses inline execution prompt", async () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
-      id: "test-workflow",
-      name: "Test",
+      id: "wf-inline-workflow",
+      name: "Workflow Inline",
       version: 1,
       polling: {
         model: "claude-sonnet-4-20250514",
@@ -67,8 +77,8 @@ describe("cron payload includes polling model + execution timeout", () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
-      id: "test-override",
-      name: "Test Override",
+      id: "wf-override",
+      name: "Workflow Override",
       version: 1,
       polling: {
         model: "claude-sonnet-4-20250514",
@@ -95,8 +105,8 @@ describe("cron payload includes polling model + execution timeout", () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
-      id: "test-timeout",
-      name: "Test Timeout",
+      id: "wf-timeout",
+      name: "Workflow Timeout",
       version: 1,
       polling: { model: "claude-sonnet-4-20250514", timeoutSeconds: 120 },
       agents: [{ id: "agent-t", name: "Agent T", workspace: { baseDir: "agents/t", files: {} } }],
@@ -111,8 +121,8 @@ describe("cron payload includes polling model + execution timeout", () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
-      id: "test-agent-timeout",
-      name: "Test Agent Timeout",
+      id: "wf-agent-timeout",
+      name: "Workflow Agent Timeout",
       version: 1,
       polling: { model: "claude-sonnet-4-20250514", timeoutSeconds: 120 },
       agents: [{ id: "agent-long", name: "Agent Long", timeoutSeconds: 2400, workspace: { baseDir: "agents/long", files: {} } }],
