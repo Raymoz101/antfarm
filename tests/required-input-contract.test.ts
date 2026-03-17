@@ -53,4 +53,35 @@ describe("claimStep enforces explicit required input contracts", () => {
     assert.match(step.output, /missing required template key\(s\) branch/i);
     assert.equal(run.status, "failed");
   });
+
+  it("defaults verify_feedback for first-pass single-step claims", () => {
+    const db = getDb();
+    const runId = randomUUID();
+    const stepId = randomUUID();
+    const agentId = `required-contract-${randomUUID().slice(0, 8)}`;
+    const now = new Date().toISOString();
+
+    db.prepare(
+      `INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at)
+       VALUES (?, 'bug-fix', 'task', 'running', ?, ?, ?)`
+    ).run(runId, JSON.stringify({ repo: '/tmp/example-repo', branch: 'bugfix-test', build_cmd: 'npm run build', test_cmd: 'npm test', affected_area: 'src/initials.js', root_cause: 'empty segments are not ignored', fix_approach: 'filter blank parts before mapping', problem_statement: 'initials throws on repeated whitespace', task: 'bug report' }), now, now);
+
+    db.prepare(
+      `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at, type)
+       VALUES (?, ?, 'fix', ?, 3, ?, 'STATUS: done', 'pending', ?, ?, 'single')`
+    ).run(
+      stepId,
+      runId,
+      agentId,
+      "Implement the bug fix.\nVERIFY FEEDBACK: {{verify_feedback}}\nROOT_CAUSE: {{root_cause}}",
+      now,
+      now,
+    );
+
+    runIds.push(runId);
+
+    const result = claimStep(agentId);
+    assert.equal(result.found, true, 'should claim the step even without verify_feedback in context');
+    assert.match(result.resolvedInput ?? '', /VERIFY FEEDBACK:\s*\nROOT_CAUSE:/, 'verify_feedback should resolve to an empty string on first pass');
+  });
 });

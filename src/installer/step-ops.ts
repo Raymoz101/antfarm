@@ -735,6 +735,13 @@ export function claimStep(agentId: string): ClaimResult {
     context["progress"] = readProgressFile(step.run_id);
   }
 
+  // Optional retry feedback is consumed by some single-step workflows (for example
+  // bug-fix fix -> verify -> retry) but is absent on the first pass. Default it so
+  // first-attempt claims do not fail template resolution.
+  if (!context["verify_feedback"]) {
+    context["verify_feedback"] = "";
+  }
+
   const missingKeys = getMissingInputKeys(step.input_template, step.required_keys, context);
   if (missingKeys.length > 0) {
     failStepWithMissingInputs(step.id, step.step_id, step.run_id, missingKeys);
