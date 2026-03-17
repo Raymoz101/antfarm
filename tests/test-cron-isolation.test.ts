@@ -172,6 +172,52 @@ describe("test-cron-isolation: ANTFARM_TEST=1 forces sanitization of ALL jobs", 
   });
 });
 
+describe("test-cron-isolation: production skips creating Antfarm test workflow crons", () => {
+  let savedAntfarmTest: string | undefined;
+  let savedNodeEnv: string | undefined;
+
+  beforeEach(() => {
+    savedAntfarmTest = process.env.ANTFARM_TEST;
+    savedNodeEnv = process.env.NODE_ENV;
+    delete process.env.ANTFARM_TEST;
+    process.env.NODE_ENV = "production";
+  });
+
+  afterEach(() => {
+    if (savedAntfarmTest === undefined) delete process.env.ANTFARM_TEST;
+    else process.env.ANTFARM_TEST = savedAntfarmTest;
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
+  });
+
+  it("createAgentCronJob short-circuits antfarm/test-* jobs before HTTP", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalled = false;
+
+    globalThis.fetch = (async (..._args: any[]) => {
+      fetchCalled = true;
+      throw new Error("fetch should not be called for antfarm test workflow crumbs in production");
+    }) as any;
+
+    try {
+      const mod = await import(`../dist/installer/gateway-api.js?antfarm-prod-skip-${Date.now()}`);
+      const result = await mod.createAgentCronJob({
+        name: "antfarm/test-wf/test-agent",
+        schedule: { kind: "every", everyMs: 300_000 },
+        sessionTarget: "isolated",
+        agentId: "test-agent",
+        payload: { kind: "agentTurn", message: "poll" },
+        enabled: true,
+      });
+      assert.equal(result.ok, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    assert.equal(fetchCalled, false, "fetch was NOT called for antfarm/test-* cron in production env");
+  });
+});
+
 describe("test-cron-isolation: ANTFARM_TEST=1 blocks HTTP path (via module import)", () => {
   let savedEnv: string | undefined;
 

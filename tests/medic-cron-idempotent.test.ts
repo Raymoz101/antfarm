@@ -15,10 +15,16 @@ describe("installMedicCron is idempotent", () => {
   let createdCronCount: number;
   let listedJobs: Array<{ id: string; name: string }>;
   let originalFetch: typeof globalThis.fetch;
+  let savedNodeEnv: string | undefined;
+  let savedAntfarmTest: string | undefined;
 
   beforeEach(() => {
     fetchCallCount = 0;
     createdCronCount = 0;
+    savedNodeEnv = process.env.NODE_ENV;
+    savedAntfarmTest = process.env.ANTFARM_TEST;
+    process.env.NODE_ENV = "production";
+    delete process.env.ANTFARM_TEST;
     // Simulate the medic cron already existing after the first install
     listedJobs = [{ id: "existing-medic-id", name: "antfarm/medic" }];
 

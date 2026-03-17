@@ -14,10 +14,20 @@ import assert from "node:assert/strict";
 describe("cron payload model omission when default/falsy", () => {
   let capturedJobs: any[];
   let originalFetch: typeof globalThis.fetch;
+  let savedNodeEnv: string | undefined;
+  let savedAntfarmTest: string | undefined;
 
   beforeEach(() => {
     capturedJobs = [];
     originalFetch = globalThis.fetch;
+    savedNodeEnv = process.env.NODE_ENV;
+    savedAntfarmTest = process.env.ANTFARM_TEST;
+
+    // These regression tests validate the production cron payload shape.
+    // Force a non-test env so gateway-api does not short-circuit HTTP creation.
+    process.env.NODE_ENV = "production";
+    delete process.env.ANTFARM_TEST;
+
     globalThis.fetch = (async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
       if (body.args?.job) {
@@ -33,14 +43,18 @@ describe("cron payload model omission when default/falsy", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedNodeEnv;
+    if (savedAntfarmTest === undefined) delete process.env.ANTFARM_TEST;
+    else process.env.ANTFARM_TEST = savedAntfarmTest;
   });
 
   it("omits model from payload when workflow polling.model is 'default'", async () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
-      id: "test-default-model",
-      name: "Test Default Model",
+      id: "wf-default-model",
+      name: "Workflow Default Model",
       version: 1,
       polling: {
         model: "default",
@@ -76,8 +90,8 @@ describe("cron payload model omission when default/falsy", () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
-      id: "test-no-polling",
-      name: "Test No Polling",
+      id: "wf-no-polling",
+      name: "Workflow No Polling",
       version: 1,
       // no polling config — defaults to DEFAULT_POLLING_MODEL = "default"
       agents: [
@@ -108,8 +122,8 @@ describe("cron payload model omission when default/falsy", () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
-      id: "test-real-model",
-      name: "Test Real Model",
+      id: "wf-real-model",
+      name: "Workflow Real Model",
       version: 1,
       polling: {
         model: "claude-haiku-4-5-20251001",
