@@ -43,6 +43,7 @@ describe("buildPollingPrompt", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer");
     assert.ok(prompt.includes("step complete"), "should include step complete from work prompt");
     assert.ok(prompt.includes("step fail"), "should include step fail from work prompt");
+    assert.ok(prompt.includes("use ONLY that block as your output contract"), "should include exact-output guidance from work prompt");
     assert.ok(prompt.includes("---START WORK PROMPT---"), "should delimit work prompt");
     assert.ok(prompt.includes("---END WORK PROMPT---"), "should delimit work prompt");
   });

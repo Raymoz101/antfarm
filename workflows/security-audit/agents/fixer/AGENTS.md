@@ -68,6 +68,8 @@ Examples:
 
 ## Output Format
 
+**Source of truth:** the claimed step input's `Reply with:` block. If this file's example differs from the claimed step input, follow the claimed step input.
+
 ```
 STATUS: done
 CHANGES: what was fixed (files changed, what was done)

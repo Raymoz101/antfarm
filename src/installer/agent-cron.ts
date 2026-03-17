@@ -1,8 +1,12 @@
 import { createAgentCronJob, deleteAgentCronJobs, listCronJobs, checkCronToolAvailable } from "./gateway-api.js";
-import type { WorkflowSpec } from "./types.js";
+import type { WorkflowAgent, WorkflowSpec } from "./types.js";
 import { resolveAntfarmCli } from "./paths.js";
 import { getDb } from "../db.js";
 import { readOpenClawConfig } from "./openclaw-config.js";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 
 const DEFAULT_EVERY_MS = 300_000; // 5 minutes
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 30 * 60; // 30 minutes
@@ -38,6 +42,8 @@ cat /tmp/antfarm-step-output.txt | node ${cli} step complete "<stepId>"
 
 CRITICAL OUTPUT RULES:
 - Follow the claimed step input's "Reply with:" contract exactly
+- First extract the exact keys from the claimed step input's "Reply with:" block and use ONLY that block as your output contract
+- Ignore stale agent-doc examples or generic wrapper habits if they conflict with the claimed step input
 - Do NOT substitute generic fields like CHANGES or TESTS unless the input explicitly asks for them
 - If the input requires REPO / BRANCH / SEVERITY / AFFECTED_AREA / REPRODUCTION / PROBLEM_STATEMENT, emit those exact keys
 - If the input requires ROOT_CAUSE / FIX_APPROACH, REGRESSION_TEST, or VERIFIED, emit those exact keys
@@ -79,6 +85,8 @@ cat /tmp/antfarm-step-output.txt | node ${cli} step complete "<stepId>"
 
 CRITICAL OUTPUT RULES:
 - Follow the claimed step input's "Reply with:" contract exactly
+- First extract the exact keys from the claimed step input's "Reply with:" block and use ONLY that block as your output contract
+- Ignore stale agent-doc examples or generic wrapper habits if they conflict with the claimed step input
 - Do NOT substitute generic fields like CHANGES or TESTS unless the input explicitly asks for them
 - If the input requires REPO / BRANCH / SEVERITY / AFFECTED_AREA / REPRODUCTION / PROBLEM_STATEMENT, emit those exact keys
 - If the input requires ROOT_CAUSE / FIX_APPROACH, REGRESSION_TEST, or VERIFIED, emit those exact keys
@@ -165,49 +173,87 @@ ${workPrompt}
 Reply with a short summary of what you spawned.`;
 }
 
-export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
-  const agents = workflow.agents;
-  // Allow per-workflow cron interval via cron.interval_ms in workflow.yml
-  const everyMs = (workflow as any).cron?.interval_ms ?? DEFAULT_EVERY_MS;
+type CronJobShape = {
+  id?: string;
+  name: string;
+  schedule?: { kind?: string; everyMs?: number; anchorMs?: number };
+  sessionTarget?: string;
+  agentId?: string;
+  payload?: { kind?: string; message?: string; model?: string; timeoutSeconds?: number };
+  delivery?: { mode?: string; channel?: string; to?: string };
+  enabled?: boolean;
+};
 
-  // Resolve polling model: per-agent > workflow-level > default
+async function buildDesiredCronJob(workflow: WorkflowSpec, agent: WorkflowAgent, index: number): Promise<CronJobShape> {
+  const everyMs = (workflow as any).cron?.interval_ms ?? DEFAULT_EVERY_MS;
   const workflowPollingModel = workflow.polling?.model ?? DEFAULT_POLLING_MODEL;
   const workflowPollingTimeout = workflow.polling?.timeoutSeconds ?? DEFAULT_POLLING_TIMEOUT_SECONDS;
+  const anchorMs = index * 60_000;
+  const cronName = `antfarm/${workflow.id}/${agent.id}`;
+  const agentId = `${workflow.id}_${agent.id}`;
 
-  for (let i = 0; i < agents.length; i++) {
-    const agent = agents[i];
-    const anchorMs = i * 60_000; // stagger by 1 minute each
-    const cronName = `antfarm/${workflow.id}/${agent.id}`;
-    const agentId = `${workflow.id}_${agent.id}`;
+  const requestedPollingModel = agent.pollingModel ?? workflowPollingModel;
+  const pollingModel = await resolveAgentCronModel(agentId, requestedPollingModel);
+  const requestedWorkModel = agent.model ?? workflowPollingModel;
+  const workModel = await resolveAgentCronModel(agentId, requestedWorkModel);
+  const prompt = buildPollingPrompt(workflow.id, agent.id, workModel);
+  const resolvedModel = pollingModel && pollingModel !== "default" ? pollingModel : undefined;
 
-    // Two-phase: Phase 1 uses cheap polling model + minimal prompt
-    const requestedPollingModel = agent.pollingModel ?? workflowPollingModel;
-    const pollingModel = await resolveAgentCronModel(agentId, requestedPollingModel);
-    const requestedWorkModel = agent.model ?? workflowPollingModel;
-    const workModel = await resolveAgentCronModel(agentId, requestedWorkModel);
-    const prompt = buildPollingPrompt(workflow.id, agent.id, workModel);
-    const timeoutSeconds = workflowPollingTimeout;
+  return {
+    name: cronName,
+    schedule: { kind: "every", everyMs, anchorMs },
+    sessionTarget: "isolated",
+    agentId,
+    payload: {
+      kind: "agentTurn",
+      message: prompt,
+      ...(resolvedModel ? { model: resolvedModel } : {}),
+      timeoutSeconds: workflowPollingTimeout,
+    },
+    delivery: { mode: "none" },
+    enabled: true,
+  };
+}
 
-    // Omit model from payload when it is "default" or falsy — the gateway/CLI
-    // will apply the agent's configured default, avoiding the literal string
-    // "default" leaking into the cron job definition.
-    const resolvedModel =
-      pollingModel && pollingModel !== "default" ? pollingModel : undefined;
+function normalizeMaybeString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
 
-    const result = await createAgentCronJob({
-      name: cronName,
-      schedule: { kind: "every", everyMs, anchorMs },
-      sessionTarget: "isolated",
-      agentId,
-      payload: {
-        kind: "agentTurn",
-        message: prompt,
-        ...(resolvedModel ? { model: resolvedModel } : {}),
-        timeoutSeconds,
-      },
-      delivery: { mode: "none" },
-      enabled: true,
-    });
+function cronJobsMatch(existing: CronJobShape, desired: CronJobShape): boolean {
+  return existing.name === desired.name
+    && existing.schedule?.kind === desired.schedule?.kind
+    && existing.schedule?.everyMs === desired.schedule?.everyMs
+    && existing.schedule?.anchorMs === desired.schedule?.anchorMs
+    && normalizeMaybeString(existing.sessionTarget) === normalizeMaybeString(desired.sessionTarget)
+    && normalizeMaybeString(existing.agentId) === normalizeMaybeString(desired.agentId)
+    && normalizeMaybeString(existing.payload?.kind) === normalizeMaybeString(desired.payload?.kind)
+    && normalizeMaybeString(existing.payload?.message) === normalizeMaybeString(desired.payload?.message)
+    && normalizeMaybeString(existing.payload?.model) === normalizeMaybeString(desired.payload?.model)
+    && existing.payload?.timeoutSeconds === desired.payload?.timeoutSeconds
+    && normalizeMaybeString(existing.delivery?.mode) === normalizeMaybeString(desired.delivery?.mode)
+    && (existing.enabled ?? true) === (desired.enabled ?? true);
+}
+
+async function workflowCronsNeedRefresh(workflow: WorkflowSpec): Promise<boolean> {
+  const result = await listCronJobs();
+  if (!result.ok || !result.jobs) return true;
+
+  const prefix = `antfarm/${workflow.id}/`;
+  const existingJobs = result.jobs.filter((job) => job.name.startsWith(prefix));
+  if (existingJobs.length !== workflow.agents.length) return true;
+
+  const desiredJobs = await Promise.all(workflow.agents.map((agent, index) => buildDesiredCronJob(workflow, agent, index)));
+  return desiredJobs.some((desired) => {
+    const existing = existingJobs.find((job) => job.name === desired.name);
+    return !existing || !cronJobsMatch(existing, desired);
+  });
+}
+
+export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
+  for (let i = 0; i < workflow.agents.length; i++) {
+    const agent = workflow.agents[i];
+    const desiredJob = await buildDesiredCronJob(workflow, agent, i);
+    const result = await createAgentCronJob(desiredJob as any);
 
     if (!result.ok) {
       throw new Error(`Failed to create cron job for agent "${agent.id}": ${result.error}`);
@@ -217,6 +263,79 @@ export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
 
 export async function removeAgentCrons(workflowId: string): Promise<void> {
   await deleteAgentCronJobs(`antfarm/${workflowId}/`);
+}
+
+// ── Cron drift detection ─────────────────────────────────────────────
+//
+// When workflow prompts, models, or timeouts change, existing cron jobs
+// won't reflect the update until crons are recreated. We track a short
+// content-hash of all cron-influencing parameters. On each
+// ensureWorkflowCrons call, if the hash has changed we automatically
+// delete and recreate the crons — so prompt/spec changes propagate to
+// live jobs without requiring a manual reinstall.
+
+const CRON_SIG_FILE = path.join(os.homedir(), ".openclaw", "antfarm", "cron-signatures.json");
+
+function loadCronSignatures(): Record<string, string> {
+  try {
+    return JSON.parse(fs.readFileSync(CRON_SIG_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveCronSignature(workflowId: string, sig: string): void {
+  try {
+    const sigs = loadCronSignatures();
+    sigs[workflowId] = sig;
+    const dir = path.dirname(CRON_SIG_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CRON_SIG_FILE, JSON.stringify(sigs, null, 2), "utf-8");
+  } catch {
+    // best-effort — signature tracking is advisory, not critical
+  }
+}
+
+/**
+ * Compute a short hash over all parameters that affect cron job payloads:
+ * agent ids/models/timeouts, polling config, interval, and the built-in
+ * prompt template text (so antfarm upgrades that change prompts also
+ * trigger a refresh).
+ *
+ * Exported for testing.
+ */
+export function computeWorkflowCronSignature(workflow: WorkflowSpec): string {
+  const everyMs = (workflow as any).cron?.interval_ms ?? DEFAULT_EVERY_MS;
+  const parts: string[] = [
+    workflow.id,
+    String(workflow.version ?? 1),
+    workflow.polling?.model ?? DEFAULT_POLLING_MODEL,
+    String(workflow.polling?.timeoutSeconds ?? DEFAULT_POLLING_TIMEOUT_SECONDS),
+    String(everyMs),
+    // Include agent-level config
+    ...workflow.agents.map(a =>
+      `${a.id}:${a.model ?? ""}:${a.pollingModel ?? ""}:${a.timeoutSeconds ?? ""}`
+    ),
+    // Include the built-in work prompt template as a proxy for antfarm version
+    ...(workflow.agents.length > 0
+      ? [buildWorkPrompt(workflow.id, workflow.agents[0].id)]
+      : []),
+  ];
+  return crypto.createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+}
+
+/**
+ * Refresh crons for a workflow by deleting and recreating them with the
+ * current spec. Call this after changing workflow prompts, models, or
+ * timeouts to ensure live cron jobs immediately reflect the latest spec.
+ *
+ * Unlike ensureWorkflowCrons (which no-ops if crons exist and are fresh),
+ * this always performs a full delete-and-recreate.
+ */
+export async function refreshWorkflowCrons(workflow: WorkflowSpec): Promise<void> {
+  await removeAgentCrons(workflow.id);
+  await setupAgentCrons(workflow);
+  saveCronSignature(workflow.id, computeWorkflowCronSignature(workflow));
 }
 
 // ── Run-scoped cron lifecycle ───────────────────────────────────────
@@ -244,10 +363,25 @@ async function workflowCronsExist(workflowId: string): Promise<boolean> {
 
 /**
  * Start crons for a workflow when a run begins.
- * No-ops if crons already exist (another run of the same workflow is active).
+ *
+ * Uses a local content-hash (cron-signatures.json) to detect whether the
+ * workflow spec has drifted since the crons were last created. If it has,
+ * crons are automatically deleted and recreated with the current spec.
+ *
+ * This ensures prompt, model, and timeout changes reach live jobs without
+ * requiring a manual `antfarm workflow install` or `ensure-crons` run.
+ * The signature comparison is fast (local file read + hash) and avoids
+ * repeated gateway round-trips for payload comparison — since listCronJobs
+ * only returns {id,name}, payload-level drift cannot be detected via the
+ * gateway API alone.
  */
 export async function ensureWorkflowCrons(workflow: WorkflowSpec): Promise<void> {
-  if (await workflowCronsExist(workflow.id)) return;
+  const currentSig = computeWorkflowCronSignature(workflow);
+  const storedSig = loadCronSignatures()[workflow.id];
+  const cronsExist = await workflowCronsExist(workflow.id);
+
+  // Fast path: crons are present and spec is unchanged — nothing to do
+  if (cronsExist && storedSig === currentSig) return;
 
   // Preflight: verify cron tool is accessible before attempting to create jobs
   const preflight = await checkCronToolAvailable();
@@ -255,7 +389,13 @@ export async function ensureWorkflowCrons(workflow: WorkflowSpec): Promise<void>
     throw new Error(preflight.error!);
   }
 
+  // If stale crons exist (spec drifted or no stored sig yet), remove them first
+  if (cronsExist) {
+    await removeAgentCrons(workflow.id);
+  }
+
   await setupAgentCrons(workflow);
+  saveCronSignature(workflow.id, currentSig);
 }
 
 /**

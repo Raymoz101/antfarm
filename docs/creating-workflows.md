@@ -147,10 +147,17 @@ steps:
       STATUS: done
       MY_KEY: value          # KEY: value pairs become variables for later steps
     expects: "STATUS: done"  # String the output must contain to count as success
+    requires: [repo, branch] # Explicit input contract: keys that must exist before claim (optional)
+    produces: [status, pr]   # Explicit output contract: keys the step must emit on success (optional)
     max_retries: 2           # How many times to retry on failure (optional)
     on_fail:                 # What to do when retries exhausted (optional)
       escalate_to: human     # Escalate to human
 ```
+
+`requires` and `produces` are the low-failure contract fields:
+- `requires` fails fast at claim time if an upstream step never produced required context
+- `produces` retries/fails the producing step if its reply omits required keys
+- Use both for critical handoffs like `repo`, `branch`, `severity`, `root_cause`, `verified`, and `pr`
 
 ### Agent Timeouts
 
@@ -330,12 +337,126 @@ antfarm workflow install my-workflow
 ```
 
 This provisions agent workspaces, registers agents in OpenClaw config, and sets up cron polling.
+Live cron jobs are now reconciled against the workflow spec when runs start/resume, so prompt/model/timeout updates propagate automatically. If you need an immediate rollout to an already-installed idle workflow, you can still force-refresh with:
+
+```bash
+antfarm workflow ensure-crons my-workflow
+```
+
+## Low-Failure Workflow Design
+
+The `workflows/low-failure-template/` directory contains a fully annotated reference
+implementation. The patterns below are what separate workflows that succeed reliably from
+ones that silently stall.
+
+### 1. Declare produces on every non-loop step
+
+`produces` lists the KEY names the step must emit. If any are missing, the runtime rejects
+the output and retries the step automatically:
+
+```yaml
+- id: triage
+  agent: triager
+  input: |
+    ...
+    Reply with:
+    STATUS: done
+    REPO: /path/to/repo
+    SEVERITY: critical|high|medium|low
+  expects: "STATUS: done"
+  produces: [status, repo, severity]   # enforced at complete time
+```
+
+This prevents downstream steps from silently receiving `[missing: repo]` template values
+instead of real data.
+
+### 2. Include a validate-input phase before expensive work
+
+A `validate-input` step runs before setup/implementation and catches problems cheaply:
+
+```yaml
+- id: validate-input
+  agent: validator
+  input: |
+    Confirm the repo exists, derive BRANCH, and check if work is already done.
+    If already done, emit STATUS: noop with NOOP_REASON.
+    ...
+  expects: "STATUS:"
+  produces: [status, repo, branch, validation_notes]
+```
+
+The `status` field can be `noop` — the validator emits `STATUS: noop` and the workflow
+completes without running expensive downstream steps. This prevents redundant runs on
+already-fixed issues.
+
+### 3. Use verify_each for story-based loops
+
+```yaml
+- id: work
+  type: loop
+  loop:
+    over: stories
+    fresh_session: true
+    verify_each: true
+    verify_step: verify     # verifier runs after every story
+```
+
+Each story is verified before the next starts. Failures feed back to the worker with the
+exact ISSUES list as `{{verify_feedback}}`, so retries are targeted rather than blind.
+
+### 4. PR sanity checks (via shared PR agent)
+
+The shared `agents/shared/pr/AGENTS.md` now runs these checks before every PR:
+
+1. `gh auth status` — fail clearly if not authenticated
+2. `git remote get-url origin` vs REPO — catch fork/remote mismatches
+3. `gh pr list --head <branch>` — no-op if PR already exists (idempotent)
+4. `git log main..<branch>` — fail if branch has no commits
+
+### 5. Cron refresh on spec changes
+
+When you change an agent's prompt, model, or timeout in `workflow.yml`, re-run install:
+
+```bash
+antfarm workflow install my-workflow
+```
+
+Antfarm tracks a content-hash of each workflow's cron configuration. When `ensureWorkflowCrons`
+detects drift between the stored hash and the current spec (at run start), it automatically
+deletes and recreates the stale crons. You can also force an immediate refresh when a workflow
+is idle (no active runs) using `ensure-crons`:
+
+```bash
+antfarm workflow ensure-crons my-workflow
+```
+
+### 6. Step input contract: all keys must be explicit in the template
+
+Every key a step needs from upstream must appear as `{{key}}` in the step's `input` template.
+The runtime resolves these at claim time — if any are missing, the step fails with a clear
+error naming the missing keys.
+
+```yaml
+- id: fix
+  input: |
+    REPO: {{repo}}       # must come from a previous step's produces
+    BRANCH: {{branch}}
+    ROOT_CAUSE: {{root_cause}}
+    FIX_APPROACH: {{fix_approach}}
+    ...
+```
+
+If `root_cause` was never produced by an upstream step, the fix step fails immediately with
+"missing required template key(s): root_cause" — no wasted agent session.
 
 ## Tips
 
 - **Be specific in input templates.** Agents get the input as their entire task context. Vague inputs produce vague results.
 - **Include output format in every step.** Agents need to know exactly what KEY: value pairs to return.
+- **Add `produces` to every non-loop step.** Output contracts prevent silent key drift between producer and consumer steps.
 - **Use verification steps.** A verify -> retry loop catches most quality issues automatically.
 - **Keep agents focused.** One agent, one job. Don't combine triaging and fixing in the same agent.
 - **Set appropriate roles.** Use `analysis` for read-only agents and `verification` for verifiers to prevent them from modifying code they're reviewing.
 - **Test with small tasks first.** Run a simple test task before throwing a complex feature at the pipeline.
+- **Use the low-failure pattern for production workflows.** See `docs/low-failure-workflow-template.md` and `docs/examples/low-failure-workflow.yml`.
+- **Use the low-failure template.** Copy `workflows/low-failure-template/` as your starting point — it has all safeguards pre-wired.

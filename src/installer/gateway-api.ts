@@ -300,7 +300,18 @@ export async function checkCronToolAvailable(): Promise<{ ok: boolean; error?: s
   }
 }
 
-export async function listCronJobs(opts: { includeDisabled?: boolean } = {}): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string }>; error?: string }> {
+type ListedCronJob = {
+  id: string;
+  name: string;
+  schedule?: { kind?: string; everyMs?: number; anchorMs?: number };
+  sessionTarget?: string;
+  agentId?: string;
+  payload?: { kind?: string; message?: string; model?: string; timeoutSeconds?: number };
+  delivery?: { mode?: string; channel?: string; to?: string };
+  enabled?: boolean;
+};
+
+export async function listCronJobs(opts: { includeDisabled?: boolean } = {}): Promise<{ ok: boolean; jobs?: ListedCronJob[]; error?: string }> {
   // --- Try HTTP first ---
   const httpResult = await listCronJobsHTTP(opts);
   if (httpResult !== null) return httpResult;
@@ -310,7 +321,7 @@ export async function listCronJobs(opts: { includeDisabled?: boolean } = {}): Pr
     // Always pass --all so disabled crons are visible (matches HTTP includeDisabled behaviour)
     const stdout = await runCli(["cron", "list", "--json", "--all"]);
     const parsed = JSON.parse(stdout);
-    const jobs: Array<{ id: string; name: string }> = parsed.jobs ?? parsed ?? [];
+    const jobs: ListedCronJob[] = parsed.jobs ?? parsed ?? [];
     return { ok: true, jobs };
   } catch (err) {
     return { ok: false, error: `CLI fallback failed: ${err}. ${UPDATE_HINT}` };
@@ -318,7 +329,7 @@ export async function listCronJobs(opts: { includeDisabled?: boolean } = {}): Pr
 }
 
 /** HTTP-only list. Returns null on 404/network error. */
-async function listCronJobsHTTP(opts: { includeDisabled?: boolean } = {}): Promise<{ ok: boolean; jobs?: Array<{ id: string; name: string }>; error?: string } | null> {
+async function listCronJobsHTTP(opts: { includeDisabled?: boolean } = {}): Promise<{ ok: boolean; jobs?: ListedCronJob[]; error?: string } | null> {
   // Default to true so internal callers (e.g. workflowCronsExist) see disabled crons
   const includeDisabled = opts.includeDisabled ?? true;
   const gateway = await getGatewayConfig();
@@ -343,7 +354,7 @@ async function listCronJobsHTTP(opts: { includeDisabled?: boolean } = {}): Promi
       return { ok: false, error: result.error?.message ?? "Unknown error" };
     }
 
-    let jobs: Array<{ id: string; name: string }> = [];
+    let jobs: ListedCronJob[] = [];
     const content = result.result?.content;
     if (Array.isArray(content) && content[0]?.text) {
       try {

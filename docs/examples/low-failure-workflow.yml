@@ -1,0 +1,282 @@
+# Example Antfarm workflow skeleton with low-failure handoffs.
+# This is an example template, not a drop-in installed workflow.
+# Copy it into workflows/<your-workflow>/workflow.yml and pair it with agent prompts.
+
+id: low-failure-template
+name: Low-Failure Workflow Template
+version: 1
+description: |
+  Example workflow structure that minimizes contract drift, abandoned steps,
+  and unclear PR failures.
+
+polling:
+  model: default
+  timeoutSeconds: 120
+
+agents:
+  - id: triager
+    role: analysis
+    workspace:
+      baseDir: agents/triager
+      files:
+        AGENTS.md: agents/triager/AGENTS.md
+        SOUL.md: agents/triager/SOUL.md
+        IDENTITY.md: agents/triager/IDENTITY.md
+
+  - id: validator
+    role: analysis
+    workspace:
+      baseDir: agents/validator
+      files:
+        AGENTS.md: agents/validator/AGENTS.md
+        SOUL.md: agents/validator/SOUL.md
+        IDENTITY.md: agents/validator/IDENTITY.md
+
+  - id: setup
+    role: coding
+    workspace:
+      baseDir: agents/setup
+      files:
+        AGENTS.md: ../../agents/shared/setup/AGENTS.md
+        SOUL.md: ../../agents/shared/setup/SOUL.md
+        IDENTITY.md: ../../agents/shared/setup/IDENTITY.md
+
+  - id: fixer
+    role: coding
+    workspace:
+      baseDir: agents/fixer
+      files:
+        AGENTS.md: agents/fixer/AGENTS.md
+        SOUL.md: agents/fixer/SOUL.md
+        IDENTITY.md: agents/fixer/IDENTITY.md
+
+  - id: verifier
+    role: verification
+    workspace:
+      baseDir: agents/verifier
+      files:
+        AGENTS.md: ../../agents/shared/verifier/AGENTS.md
+        SOUL.md: ../../agents/shared/verifier/SOUL.md
+        IDENTITY.md: ../../agents/shared/verifier/IDENTITY.md
+
+  - id: pr-sanity
+    role: pr
+    workspace:
+      baseDir: agents/pr-sanity
+      files:
+        AGENTS.md: agents/pr-sanity/AGENTS.md
+        SOUL.md: agents/pr-sanity/SOUL.md
+        IDENTITY.md: agents/pr-sanity/IDENTITY.md
+
+  - id: pr
+    role: pr
+    workspace:
+      baseDir: agents/pr
+      files:
+        AGENTS.md: ../../agents/shared/pr/AGENTS.md
+        SOUL.md: ../../agents/shared/pr/SOUL.md
+        IDENTITY.md: ../../agents/shared/pr/IDENTITY.md
+
+steps:
+  - id: triage
+    agent: triager
+    input: |
+      Triage the work and identify the canonical repo / branch / severity / problem statement.
+
+      TASK:
+      {{task}}
+
+      Reply with:
+      STATUS: done
+      REPO: /path/to/repo
+      BRANCH: bugfix/short-name
+      SEVERITY: critical|high|medium|low
+      PROBLEM_STATEMENT: clear problem summary
+    expects: "STATUS: done"
+    produces: [status, repo, branch, severity, problem_statement]
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: validate-input
+    agent: validator
+    input: |
+      Validate and normalize the run before any expensive work begins.
+
+      TASK:
+      {{task}}
+
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      SEVERITY: {{severity}}
+      PROBLEM_STATEMENT: {{problem_statement}}
+
+      Confirm:
+      1. repo exists and is the intended target
+      2. branch name is sensible and safe to create
+      3. this is actionable work and not already fixed
+      4. if this should be a no-op, say so explicitly
+      5. set canonical PR target info now
+
+      Reply with:
+      STATUS: done
+      RUN_MODE: change|noop
+      TARGET_REPO: owner/repo
+      TARGET_BASE: main
+      TARGET_HEAD: {{branch}}
+      NO_OP_REASON: blank if work is needed
+    expects: "STATUS: done"
+    requires: [repo, branch, severity, problem_statement]
+    produces: [status, run_mode, target_repo, target_base, target_head, no_op_reason]
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: setup
+    agent: setup
+    input: |
+      Prepare the repo only if work is required.
+
+      RUN_MODE: {{run_mode}}
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      TARGET_REPO: {{target_repo}}
+
+      If RUN_MODE is noop, do not create a branch. Report the existing baseline and stop safely.
+      Otherwise perform the normal setup.
+
+      Reply with:
+      STATUS: done
+      BUILD_CMD: <build command>
+      TEST_CMD: <test command>
+      BASELINE: <baseline summary>
+      CI_NOTES: <brief notes>
+    expects: "STATUS: done"
+    requires: [run_mode, repo, branch, target_repo]
+    produces: [status, build_cmd, test_cmd, baseline, ci_notes]
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: implement
+    agent: fixer
+    type: loop
+    loop:
+      over: stories
+      completion: all_done
+      fresh_session: true
+      verify_each: true
+      verify_step: verify
+    input: |
+      Implement ONE story.
+
+      RUN_MODE: {{run_mode}}
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      BUILD_CMD: {{build_cmd}}
+      TEST_CMD: {{test_cmd}}
+      CURRENT STORY:
+      {{current_story}}
+
+      VERIFY FEEDBACK (if retrying):
+      {{verify_feedback}}
+
+      If RUN_MODE is noop, do not make code changes. Explain why in CHANGES.
+
+      Reply with:
+      STATUS: done
+      CHANGES: what changed or why this was a no-op
+      REGRESSION_TEST: what test was added, or 'none (no-op)'
+    expects: "STATUS: done"
+    requires: [run_mode, repo, branch, build_cmd, test_cmd]
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: verify
+    agent: verifier
+    input: |
+      Verify the work.
+
+      RUN_MODE: {{run_mode}}
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      TEST_CMD: {{test_cmd}}
+      CHANGES: {{changes}}
+      REGRESSION_TEST: {{regression_test}}
+
+      Reply with:
+      STATUS: done
+      VERIFIED: what was confirmed
+
+      Or if incomplete:
+      STATUS: retry
+      ISSUES:
+      - exact missing keys, files, or checks
+    expects: "STATUS: done"
+    requires: [run_mode, repo, branch, test_cmd, changes, regression_test]
+    on_fail:
+      retry_step: implement
+      max_retries: 3
+      on_exhausted:
+        escalate_to: human
+
+  - id: pr-sanity
+    agent: pr-sanity
+    input: |
+      Sanity-check the PR target.
+
+      RUN_MODE: {{run_mode}}
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      TARGET_REPO: {{target_repo}}
+      TARGET_BASE: {{target_base}}
+      TARGET_HEAD: {{target_head}}
+      VERIFIED: {{verified}}
+      NO_OP_REASON: {{no_op_reason}}
+
+      Check:
+      1. correct repo/fork/base/head
+      2. branch exists remotely if needed
+      3. gh auth is available
+      4. permission to push / create PR is clear
+
+      Reply with:
+      STATUS: done
+      PR_ACTION: open|noop|blocked
+      PR_BASE_REPO: owner/repo
+      PR_HEAD_REPO: owner/repo
+      PR_PERMISSION_STATUS: ok|missing-auth|missing-push|missing-pr
+      PR_NOTES: why this should open, noop, or block
+    expects: "STATUS: done"
+    requires: [run_mode, repo, branch, target_repo, target_base, target_head, verified, no_op_reason]
+    produces: [status, pr_action, pr_base_repo, pr_head_repo, pr_permission_status, pr_notes]
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: pr
+    agent: pr
+    input: |
+      Final PR step.
+
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      PR_ACTION: {{pr_action}}
+      PR_BASE_REPO: {{pr_base_repo}}
+      PR_HEAD_REPO: {{pr_head_repo}}
+      PR_PERMISSION_STATUS: {{pr_permission_status}}
+      PR_NOTES: {{pr_notes}}
+      VERIFIED: {{verified}}
+
+      If PR_ACTION is open, create the PR.
+      If PR_ACTION is noop or blocked, do NOT force gh pr create. Return a clear terminal result.
+
+      Reply with:
+      STATUS: done
+      PR: URL to the pull request, or `none (<reason>)`
+    expects: "STATUS: done"
+    requires: [repo, branch, pr_action, pr_base_repo, pr_head_repo, pr_permission_status, pr_notes, verified]
+    produces: [status, pr]
+    on_fail:
+      escalate_to: human
