@@ -47,8 +47,8 @@ function ensureMainAgentInList(
 }
 
 // ── Shared deny list: things no workflow agent should ever touch ──
-// Note: sessions_spawn remains allowed when the host exposes it, but polling prompts
-// now include an inline-execution fallback for runtimes where that tool is unavailable.
+// Polling prompts now execute claimed work inline, so runtime-specific spawn semantics
+// are no longer part of the workflow contract.
 const ALWAYS_DENY = ["gateway", "cron", "message", "nodes", "canvas", "sessions_send"];
 
 const DEFAULT_CRON_SESSION_RETENTION = "24h";

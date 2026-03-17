@@ -27,40 +27,36 @@ describe("buildPollingPrompt", () => {
 
   it("includes instructions for parsing step claim JSON output", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer");
-    assert.ok(prompt.includes("stepId"), "should mention stepId field");
-    assert.ok(prompt.includes("runId"), "should mention runId field");
-    assert.ok(prompt.includes("input"), "should mention input field");
-    assert.ok(prompt.includes("parse"), "should instruct to parse JSON");
+    assert.ok(prompt.includes("stepId"));
+    assert.ok(prompt.includes("runId"));
+    assert.ok(prompt.includes("input"));
+    assert.ok(prompt.includes("parse"));
   });
 
-  it("treats sessions_spawn as optional and documents inline fallback", () => {
+  it("forces inline execution instead of handoff", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer");
-    assert.ok(prompt.includes("sessions_spawn"), "should still mention sessions_spawn when available");
-    assert.ok(prompt.includes("inspect your available tools"), "should tell the agent to check tool availability first");
-    assert.ok(prompt.includes("Continue in THIS session instead"), "should explain inline fallback");
+    assert.ok(prompt.includes("Do NOT hand off the claimed step"), "should forbid handoff");
+    assert.ok(prompt.includes("Execute it inline in THIS session"), "should require inline execution");
+    assert.ok(!prompt.includes("sessions_spawn"), "should not reference sessions_spawn anymore");
   });
 
   it("includes the full work prompt with step complete/fail instructions", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer");
-    assert.ok(prompt.includes("step complete"), "should include step complete from work prompt");
-    assert.ok(prompt.includes("step fail"), "should include step fail from work prompt");
-    assert.ok(prompt.includes("use ONLY that block as your output contract"), "should include exact-output guidance from work prompt");
-    assert.ok(prompt.includes("---START WORK PROMPT---"), "should delimit work prompt");
-    assert.ok(prompt.includes("---END WORK PROMPT---"), "should delimit work prompt");
+    assert.ok(prompt.includes("step complete"));
+    assert.ok(prompt.includes("step fail"));
+    assert.ok(prompt.includes("use ONLY that block as your output contract"));
+    assert.ok(prompt.includes("---START WORK PROMPT---"));
+    assert.ok(prompt.includes("---END WORK PROMPT---"));
   });
 
-  it("still specifies the optional spawned-task model", () => {
+  it("remains backward-compatible when a workModel argument is passed", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer", "claude-opus-4-6");
-    assert.ok(prompt.includes('"claude-opus-4-6"'), "should specify model for optional spawn");
+    assert.ok(prompt.includes('step claim "feature-dev_developer"'));
+    assert.ok(prompt.includes("Execute it inline in THIS session"));
   });
 
-  it("uses default model when workModel not provided", () => {
+  it("instructs to include claimed JSON in inline execution", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer");
-    assert.ok(prompt.includes('"default"'), "should use default model");
-  });
-
-  it("instructs to include claimed JSON in spawned or inline execution", () => {
-    const prompt = buildPollingPrompt("feature-dev", "developer");
-    assert.ok(prompt.includes("CLAIMED STEP JSON"), "should instruct to append claimed JSON");
+    assert.ok(prompt.includes("exact JSON output from step claim"));
   });
 });

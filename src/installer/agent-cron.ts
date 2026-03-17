@@ -141,10 +141,9 @@ async function resolveAgentCronModel(agentId: string, requestedModel?: string): 
   return requestedModel;
 }
 
-export function buildPollingPrompt(workflowId: string, agentId: string, workModel?: string): string {
+export function buildPollingPrompt(workflowId: string, agentId: string, _workModel?: string): string {
   const fullAgentId = `${workflowId}_${agentId}`;
   const cli = resolveAntfarmCli();
-  const model = workModel ?? "default";
   const workPrompt = buildWorkPrompt(workflowId, agentId);
 
   return `Step 1 — Quick check for pending work (lightweight, no side effects):
@@ -160,23 +159,15 @@ node ${cli} step claim "${fullAgentId}"
 If output is "NO_WORK", reply HEARTBEAT_OK and stop.
 
 If JSON is returned, parse it to extract stepId, runId, and input fields.
-Before doing any handoff, inspect your available tools.
+Do NOT hand off the claimed step to another session or agent. Execute it inline in THIS session so the workflow does not depend on runtime-specific spawn behavior.
+Use the exact work prompt below plus the exact JSON output from step claim.
 
-- If the sessions_spawn tool is available and allowed, you MAY spawn a fresh worker session with these parameters:
-  - agentId: "${fullAgentId}"
-  - model: "${model}"
-  - task: The full work prompt below, followed by "\\n\\nCLAIMED STEP JSON:\\n" and the exact JSON output from step claim.
-  After a successful spawn, reply with a short summary of what you spawned.
-
-- If sessions_spawn is unavailable, blocked, or the spawn attempt fails, DO NOT stop and do NOT abandon the claimed step.
-  Continue in THIS session instead. Use the exact same work prompt below plus the exact JSON output from step claim.
-
-Full work prompt for either spawned or inline execution:
+Full work prompt for inline execution:
 ---START WORK PROMPT---
 ${workPrompt}
 ---END WORK PROMPT---
 
-If you execute inline, continue immediately in this session until you call step complete or step fail.`;
+Continue immediately in this session until you call step complete or step fail.`;
 }
 
 type CronJobShape = {
@@ -200,9 +191,7 @@ async function buildDesiredCronJob(workflow: WorkflowSpec, agent: WorkflowAgent,
 
   const requestedPollingModel = agent.pollingModel ?? workflowPollingModel;
   const pollingModel = await resolveAgentCronModel(agentId, requestedPollingModel);
-  const requestedWorkModel = agent.model ?? workflowPollingModel;
-  const workModel = await resolveAgentCronModel(agentId, requestedWorkModel);
-  const prompt = buildPollingPrompt(workflow.id, agent.id, workModel);
+  const prompt = buildPollingPrompt(workflow.id, agent.id);
   const resolvedModel = pollingModel && pollingModel !== "default" ? pollingModel : undefined;
   const executionTimeout = Math.max(workflowPollingTimeout, agent.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS);
 
