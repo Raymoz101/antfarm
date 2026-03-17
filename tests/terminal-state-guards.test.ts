@@ -39,6 +39,7 @@ function createTestDb(): DatabaseSync {
       output TEXT,
       retry_count INTEGER DEFAULT 0,
       max_retries INTEGER DEFAULT 2,
+      required_keys TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'single',

@@ -88,6 +88,9 @@ function migrate(db: DatabaseSync): void {
   if (!colNames.has("produces_keys")) {
     db.exec("ALTER TABLE steps ADD COLUMN produces_keys TEXT");
   }
+  if (!colNames.has("required_keys")) {
+    db.exec("ALTER TABLE steps ADD COLUMN required_keys TEXT");
+  }
 
   // Add columns to runs table for backwards compat
   const runCols = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;

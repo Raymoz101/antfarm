@@ -109,6 +109,7 @@ steps:
       BRANCH: feature-branch-name
       STORIES_JSON: [ ... array of story objects ... ]
     expects: "STATUS: done"
+    produces: [status, repo, branch]
     max_retries: 2
     on_fail:
       escalate_to: human
@@ -140,6 +141,7 @@ steps:
       CI_NOTES: <brief CI notes>
       BASELINE: <baseline status>
     expects: "STATUS: done"
+    produces: [status, build_cmd, test_cmd, ci_notes, baseline]
     max_retries: 2
     on_fail:
       escalate_to: human

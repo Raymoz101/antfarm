@@ -296,5 +296,6 @@ steps:
       STATUS: done
       PR: URL to the pull request
     expects: "STATUS: done"
+    produces: [status, pr]
     on_fail:
       escalate_to: human

@@ -47,4 +47,10 @@ describe("buildWorkPrompt", () => {
     assert.ok(prompt.includes("Do NOT substitute generic fields like CHANGES or TESTS"));
     assert.ok(!prompt.includes("STATUS: done\nCHANGES: what you did\nTESTS: what tests you ran"));
   });
+
+  it("tells workers to derive keys from the claimed step input and ignore stale examples", () => {
+    const prompt = buildWorkPrompt("feature-dev", "developer");
+    assert.ok(prompt.includes("use ONLY that block as your output contract"));
+    assert.ok(prompt.includes("Ignore stale agent-doc examples"));
+  });
 });

@@ -110,6 +110,24 @@ function findMissingTemplateKeys(template: string, context: Record<string, strin
   return missing;
 }
 
+function findMissingRequiredKeys(requiredKeysJson: string | null, context: Record<string, string>): string[] {
+  if (!requiredKeysJson) return [];
+  const requiredKeys: string[] = JSON.parse(requiredKeysJson);
+  return requiredKeys.filter((key) => !Object.prototype.hasOwnProperty.call(context, key));
+}
+
+function getMissingInputKeys(template: string, requiredKeysJson: string | null, context: Record<string, string>): string[] {
+  const seen = new Set<string>();
+  const missing: string[] = [];
+  for (const key of [...findMissingTemplateKeys(template, context), ...findMissingRequiredKeys(requiredKeysJson, context)]) {
+    if (!seen.has(key)) {
+      seen.add(key);
+      missing.push(key);
+    }
+  }
+  return missing;
+}
+
 /**
  * Get the workspace path for an OpenClaw agent by its id.
  */
@@ -552,7 +570,7 @@ export function claimStep(agentId: string): ClaimResult {
   const db = getDb();
 
   const step = db.prepare(
-    `SELECT s.id, s.step_id, s.run_id, s.input_template, s.type, s.loop_config, s.step_index
+    `SELECT s.id, s.step_id, s.run_id, s.input_template, s.type, s.loop_config, s.step_index, s.required_keys
      FROM steps s
      JOIN runs r ON r.id = s.run_id
      WHERE s.agent_id = ? AND s.status = 'pending'
@@ -570,6 +588,7 @@ export function claimStep(agentId: string): ClaimResult {
     id: string; step_id: string; run_id: string; input_template: string; type: string;
     loop_config: string | null;
     step_index: number;
+    required_keys: string | null;
   } | undefined;
 
   if (!step) return { found: false };
@@ -687,7 +706,7 @@ export function claimStep(agentId: string): ClaimResult {
         context["verify_feedback"] = "";
       }
 
-      const missingKeys = findMissingTemplateKeys(step.input_template, context);
+      const missingKeys = getMissingInputKeys(step.input_template, step.required_keys, context);
       if (missingKeys.length > 0) {
         failStepWithMissingInputs(step.id, step.step_id, step.run_id, missingKeys);
         return { found: false };
@@ -716,7 +735,7 @@ export function claimStep(agentId: string): ClaimResult {
     context["progress"] = readProgressFile(step.run_id);
   }
 
-  const missingKeys = findMissingTemplateKeys(step.input_template, context);
+  const missingKeys = getMissingInputKeys(step.input_template, step.required_keys, context);
   if (missingKeys.length > 0) {
     failStepWithMissingInputs(step.id, step.step_id, step.run_id, missingKeys);
     return { found: false };

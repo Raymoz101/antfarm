@@ -126,6 +126,7 @@ steps:
       VULNERABILITY_COUNT: <number>
       FINDINGS: <detailed list of each vulnerability>
     expects: "STATUS: done"
+    produces: [status, repo, branch, vulnerability_count, findings]
     max_retries: 2
     on_fail:
       escalate_to: human
@@ -165,6 +166,7 @@ steps:
       DEFERRED: <any issues skipped and why>
       STORIES_JSON: [ ... array of story objects ... ]
     expects: "STATUS: done"
+    produces: [status, fix_plan, critical_count, high_count, deferred]
     max_retries: 2
     on_fail:
       escalate_to: human
@@ -190,6 +192,7 @@ steps:
       TEST_CMD: <test command>
       BASELINE: <baseline status>
     expects: "STATUS: done"
+    produces: [status, build_cmd, test_cmd, baseline]
     max_retries: 2
     on_fail:
       escalate_to: human
@@ -392,5 +395,9 @@ steps:
       STATUS: done
       PR: URL to the pull request
     expects: "STATUS: done"
+    produces: [status, pr]
     on_fail:
       escalate_to: human
+:
+      escalate_to: human
+calate_to: human

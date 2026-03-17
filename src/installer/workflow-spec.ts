@@ -100,6 +100,16 @@ function validateSteps(steps: WorkflowStep[], workflowDir: string) {
     if (!step.expects?.trim()) {
       throw new Error(`workflow.yml missing step.expects for step "${step.id}"`);
     }
+    if (step.requires !== undefined) {
+      if (!Array.isArray(step.requires) || step.requires.some((key) => typeof key !== "string" || !key.trim())) {
+        throw new Error(`workflow.yml step "${step.id}" requires must be a list of non-empty strings`);
+      }
+    }
+    if (step.produces !== undefined) {
+      if (!Array.isArray(step.produces) || step.produces.some((key) => typeof key !== "string" || !key.trim())) {
+        throw new Error(`workflow.yml step "${step.id}" produces must be a list of non-empty strings`);
+      }
+    }
   }
 
   // Validate loop config references

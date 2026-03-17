@@ -59,11 +59,12 @@ When creating the PR:
 
 ## Output Format
 
+**Source of truth:** the claimed step input's `Reply with:` block. If this file's example differs from the claimed step input, follow the claimed step input.
+
+Typical implementation-step output:
+
 ```
 STATUS: done
-REPO: /path/to/repo
-BRANCH: feature-branch-name
-COMMITS: abc123, def456
 CHANGES: What you implemented
 TESTS: What tests you wrote
 ```

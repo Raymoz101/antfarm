@@ -42,6 +42,8 @@ Examples:
 
 ## Output Format
 
+**Source of truth:** the claimed step input's `Reply with:` block. If this file's example differs from the claimed step input, follow the claimed step input.
+
 ```
 STATUS: done
 CHANGES: what files were changed and what was done (e.g., "Updated filterUsers in src/lib/search.ts to handle null displayName. Added null check before comparison.")
