@@ -1,29 +1,27 @@
 /**
- * Regression test: cron payload must include polling model
+ * Regression tests for cron payload model + timeout behavior.
  *
- * Bug #121: The stale dist was using buildAgentPrompt() which produced
- * cron payloads WITHOUT a model field, causing all polling to run on
- * the agent's default model (opus) instead of the cheap polling model
- * (sonnet). This test ensures setupAgentCrons always produces payloads
- * with the correct polling model.
+ * Bug #121: stale dist once dropped the polling model from cron payloads,
+ * causing all polling to run on the wrong model.
+ *
+ * Bug #clean-run-20260317: polling prompts could require sessions_spawn in
+ * environments where that tool is unavailable. When inline fallback is needed,
+ * cron payload timeouts must be long enough for real work.
  */
 
 import { describe, it, mock, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-describe("cron payload includes polling model (regression #121)", () => {
+describe("cron payload includes polling model + execution timeout", () => {
   let capturedJobs: any[];
   let originalFetch: typeof globalThis.fetch;
 
   beforeEach(() => {
     capturedJobs = [];
     originalFetch = globalThis.fetch;
-    // Mock fetch to capture the cron job payloads
     globalThis.fetch = mock.fn(async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
-      if (body.args?.job) {
-        capturedJobs.push(body.args.job);
-      }
+      if (body.args?.job) capturedJobs.push(body.args.job);
       return {
         ok: true,
         status: 200,
@@ -36,7 +34,7 @@ describe("cron payload includes polling model (regression #121)", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("setupAgentCrons passes polling model in payload, not opus", async () => {
+  it("setupAgentCrons passes polling model in payload and keeps inline fallback guidance", async () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
@@ -64,20 +62,17 @@ describe("cron payload includes polling model (regression #121)", () => {
     assert.equal(capturedJobs.length, 1, "should create one cron job");
     const payload = capturedJobs[0].payload;
 
-    // Key regression assertion: payload.model must be the polling model, NOT opus
     assert.equal(
       payload.model,
       "claude-sonnet-4-20250514",
-      "cron payload must use polling model (sonnet), not the default agent model (opus)"
+      "cron payload must use polling model"
     );
 
-    // Also verify the prompt uses buildPollingPrompt (contains sessions_spawn)
     assert.ok(
-      payload.message.includes("sessions_spawn"),
-      "polling prompt should mention sessions_spawn (two-phase design)"
+      payload.message.includes("Continue in THIS session instead"),
+      "polling prompt should document inline fallback when sessions_spawn is unavailable"
     );
 
-    // And NOT the old buildAgentPrompt style (which had the full execution logic inline)
     assert.ok(
       !payload.message.startsWith("You are an Antfarm workflow agent. Check for pending work"),
       "should NOT use old buildAgentPrompt format"
@@ -117,23 +112,11 @@ describe("cron payload includes polling model (regression #121)", () => {
     await setupAgentCrons(fakeWorkflow as any);
 
     assert.equal(capturedJobs.length, 2, "should create two cron jobs");
-
-    // Agent with pollingModel override
-    assert.equal(
-      capturedJobs[0].payload.model,
-      "claude-haiku-3",
-      "per-agent pollingModel should override workflow-level polling model"
-    );
-
-    // Agent without override should use workflow-level polling model
-    assert.equal(
-      capturedJobs[1].payload.model,
-      "claude-sonnet-4-20250514",
-      "agent without pollingModel should use workflow-level polling model"
-    );
+    assert.equal(capturedJobs[0].payload.model, "claude-haiku-3");
+    assert.equal(capturedJobs[1].payload.model, "claude-sonnet-4-20250514");
   });
 
-  it("cron payload includes timeoutSeconds from workflow polling config", async () => {
+  it("cron payload timeout expands to full execution budget when inline fallback may be needed", async () => {
     const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
 
     const fakeWorkflow = {
@@ -158,7 +141,39 @@ describe("cron payload includes polling model (regression #121)", () => {
 
     await setupAgentCrons(fakeWorkflow as any);
 
-    assert.equal(capturedJobs[0].payload.timeoutSeconds, 120,
-      "cron payload should include timeoutSeconds from workflow polling config");
+    assert.equal(
+      capturedJobs[0].payload.timeoutSeconds,
+      1800,
+      "cron payload should use a long execution timeout for inline fallback"
+    );
+  });
+
+  it("agent-specific timeoutSeconds can exceed the workflow polling timeout", async () => {
+    const { setupAgentCrons } = await import("../dist/installer/agent-cron.js");
+
+    const fakeWorkflow = {
+      id: "test-agent-timeout",
+      name: "Test Agent Timeout",
+      version: 1,
+      polling: {
+        model: "claude-sonnet-4-20250514",
+        timeoutSeconds: 120,
+      },
+      agents: [
+        {
+          id: "agent-long",
+          name: "Agent Long",
+          timeoutSeconds: 2400,
+          workspace: { baseDir: "agents/long", files: {} },
+        },
+      ],
+      steps: [
+        { id: "s1", agent: "agent-long", input: "work", expects: "R" },
+      ],
+    };
+
+    await setupAgentCrons(fakeWorkflow as any);
+
+    assert.equal(capturedJobs[0].payload.timeoutSeconds, 2400);
   });
 });

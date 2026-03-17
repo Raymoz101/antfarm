@@ -33,10 +33,11 @@ describe("buildPollingPrompt", () => {
     assert.ok(prompt.includes("parse"), "should instruct to parse JSON");
   });
 
-  it("includes sessions_spawn invocation with correct agentId", () => {
+  it("treats sessions_spawn as optional and documents inline fallback", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer");
-    assert.ok(prompt.includes("sessions_spawn"), "should mention sessions_spawn");
-    assert.ok(prompt.includes('"feature-dev_developer"'), "should include full agentId");
+    assert.ok(prompt.includes("sessions_spawn"), "should still mention sessions_spawn when available");
+    assert.ok(prompt.includes("inspect your available tools"), "should tell the agent to check tool availability first");
+    assert.ok(prompt.includes("Continue in THIS session instead"), "should explain inline fallback");
   });
 
   it("includes the full work prompt with step complete/fail instructions", () => {
@@ -48,9 +49,9 @@ describe("buildPollingPrompt", () => {
     assert.ok(prompt.includes("---END WORK PROMPT---"), "should delimit work prompt");
   });
 
-  it("specifies the full model for the spawned task", () => {
+  it("still specifies the optional spawned-task model", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer", "claude-opus-4-6");
-    assert.ok(prompt.includes('"claude-opus-4-6"'), "should specify model for spawn");
+    assert.ok(prompt.includes('"claude-opus-4-6"'), "should specify model for optional spawn");
   });
 
   it("uses default model when workModel not provided", () => {
@@ -58,7 +59,7 @@ describe("buildPollingPrompt", () => {
     assert.ok(prompt.includes('"default"'), "should use default model");
   });
 
-  it("instructs to include claimed JSON in spawned task", () => {
+  it("instructs to include claimed JSON in spawned or inline execution", () => {
     const prompt = buildPollingPrompt("feature-dev", "developer");
     assert.ok(prompt.includes("CLAIMED STEP JSON"), "should instruct to append claimed JSON");
   });

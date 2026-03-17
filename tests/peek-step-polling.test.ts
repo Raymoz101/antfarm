@@ -283,9 +283,10 @@ describe("polling prompt includes step peek", () => {
     assert.ok(prompt.includes('step peek "bug-fix_triager"'), "should include correct agent id in peek");
   });
 
-  it("still includes sessions_spawn for when work exists", async () => {
+  it("includes inline fallback when sessions_spawn is unavailable", async () => {
     const { buildPollingPrompt } = await import("../dist/installer/agent-cron.js");
     const prompt = buildPollingPrompt("bug-fix", "fixer");
-    assert.ok(prompt.includes("sessions_spawn"), "should still include sessions_spawn");
+    assert.ok(prompt.includes("sessions_spawn"), "should still mention sessions_spawn when available");
+    assert.ok(prompt.includes("Continue in THIS session instead"), "should include inline fallback");
   });
 });
