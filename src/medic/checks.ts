@@ -44,7 +44,7 @@ export function checkStuckSteps(): MedicFinding[] {
     JOIN runs r ON r.id = s.run_id
     WHERE s.status = 'running'
       AND r.status = 'running'
-      AND (julianday('now') - julianday(s.updated_at)) * 86400000 > ?
+      AND (julianday('now') - julianday(REPLACE(s.updated_at, 'T', ' '))) * 86400000 > ?
   `).all(MAX_ROLE_TIMEOUT_MS) as Array<{
     id: string; step_id: string; run_id: string; agent_id: string;
     updated_at: string; abandoned_count: number; workflow_id: string; task: string;
@@ -84,18 +84,21 @@ export function checkStalledRuns(): MedicFinding[] {
 
   // Get running runs where BOTH the most recent step update AND story update are stale.
   // A run is only stalled if neither steps nor stories have progressed recently.
+  // REPLACE('T',' ') normalises ISO timestamps (2026-01-01T00:00:00.000Z) to
+  // space-separated format (2026-01-01 00:00:00) so julianday() and MAX() work
+  // correctly. Without this, lexicographic MAX picks 'T' > ' ' giving wrong results.
   const stalled = db.prepare(`
     SELECT r.id, r.workflow_id, r.task, r.updated_at,
-           MAX(s.updated_at) as last_step_update,
-           (SELECT MAX(st.updated_at) FROM stories st WHERE st.run_id = r.id) as last_story_update
+           MAX(REPLACE(s.updated_at, 'T', ' ')) as last_step_update,
+           (SELECT MAX(REPLACE(st.updated_at, 'T', ' ')) FROM stories st WHERE st.run_id = r.id) as last_story_update
     FROM runs r
     JOIN steps s ON s.run_id = r.id
     WHERE r.status = 'running'
     GROUP BY r.id
     HAVING (julianday('now') - julianday(
       MAX(
-        COALESCE(MAX(s.updated_at), '2000-01-01'),
-        COALESCE((SELECT MAX(st.updated_at) FROM stories st WHERE st.run_id = r.id), '2000-01-01')
+        COALESCE(MAX(REPLACE(s.updated_at, 'T', ' ')), '2000-01-01'),
+        COALESCE((SELECT MAX(REPLACE(st.updated_at, 'T', ' ')) FROM stories st WHERE st.run_id = r.id), '2000-01-01')
       )
     )) * 86400000 > ?
   `).all(STALL_THRESHOLD_MS) as Array<{

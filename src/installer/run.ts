@@ -14,7 +14,10 @@ export async function runWorkflow(params: {
   const workflowDir = resolveWorkflowDir(params.workflowId);
   const workflow = await loadWorkflowSpec(workflowDir);
   const db = getDb();
-  const now = new Date().toISOString();
+  // Use YYYY-MM-DD HH:MM:SS format to match SQLite datetime('now') — NOT toISOString()
+  // which produces the T-separated format. Mixed formats break julianday() comparisons
+  // in medic stall/stuck checks.
+  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
   const runId = crypto.randomUUID();
   const runNumber = nextRunNumber();
 
